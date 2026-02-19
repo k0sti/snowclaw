@@ -242,23 +242,28 @@ security: {
 }
 ```
 
-## File Structure
+## Repository
+
+**Repo:** `~/work/openclaw-nostr` (github: k0sti/openclaw-nostr)
+
+Standalone package, installed into OpenClaw as a channel plugin.
 
 ```
-openclaw/
-├── plugins/
-│   └── nostr/
-│       ├── package.json
-│       ├── index.ts              # Plugin entry point, exports ChannelPlugin
-│       ├── relay.ts              # WebSocket connection, AUTH, subscriptions
-│       ├── events.ts             # Event creation, signing, parsing
-│       ├── profiles.ts           # Kind 0 profile cache
-│       ├── config.ts             # Config adapter, schema, validation
-│       ├── gateway.ts            # Gateway adapter (startAccount/stopAccount)
-│       ├── outbound.ts           # Outbound adapter (sendText)
-│       ├── security.ts           # Security adapter (allowFrom, dmPolicy)
-│       ├── mentions.ts           # Mention detection for group gating
-│       └── types.ts              # Nostr-specific types
+openclaw-nostr/
+├── package.json
+├── tsconfig.json
+├── src/
+│   ├── index.ts              # Plugin entry point, exports ChannelPlugin
+│   ├── relay.ts              # WebSocket connection, AUTH, subscriptions
+│   ├── events.ts             # Event creation, signing, parsing
+│   ├── profiles.ts           # Kind 0 profile cache
+│   ├── config.ts             # Config adapter, schema, validation
+│   ├── gateway.ts            # Gateway adapter (startAccount/stopAccount)
+│   ├── outbound.ts           # Outbound adapter (sendText)
+│   ├── security.ts           # Security adapter (allowFrom, dmPolicy)
+│   ├── mentions.ts           # Mention detection for group gating
+│   └── types.ts              # Nostr-specific types
+└── README.md
 ```
 
 ## Dependencies
