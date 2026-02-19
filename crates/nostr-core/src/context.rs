@@ -10,7 +10,7 @@ pub struct HistoryMessage {
     pub content: String,
     pub timestamp: u64,
     pub event_id: String,
-    pub is_guardian: bool,
+    pub is_owner: bool,
 }
 
 /// Push a message to the history ring buffer for a group.
@@ -54,7 +54,7 @@ pub fn format_history_context(
             &msg.npub,
             9, // kind 9 for group messages
             &msg.event_id,
-            msg.is_guardian,
+            msg.is_owner,
         );
         
         let content = if msg.content.len() > 280 {
@@ -80,17 +80,17 @@ pub fn compact_group_header(
     npub: &str,
     kind: u16,
     event_id: &str,
-    is_guardian: bool,
+    is_owner: bool,
 ) -> String {
-    let guardian_badge = if is_guardian { " 👑" } else { "" };
+    let owner_badge = if is_owner { " 👑" } else { "" };
     let short_npub = truncate_npub(npub);
     let short_id = &event_id[..8.min(event_id.len())];
     
     match kind {
-        9 => format!("💬 #{} {} ({}){}  [{}]", group, sender, short_npub, guardian_badge, short_id),
-        11 => format!("👋 {} joined #{} ({}){}  [{}]", sender, group, short_npub, guardian_badge, short_id),
-        12 => format!("👋 {} left #{} ({}){}  [{}]", sender, group, short_npub, guardian_badge, short_id),
-        _ => format!("📝 #{} {} ({}){}  [kind {} | {}]", group, sender, short_npub, guardian_badge, kind, short_id),
+        9 => format!("💬 #{} {} ({}){}  [{}]", group, sender, short_npub, owner_badge, short_id),
+        11 => format!("👋 {} joined #{} ({}){}  [{}]", sender, group, short_npub, owner_badge, short_id),
+        12 => format!("👋 {} left #{} ({}){}  [{}]", sender, group, short_npub, owner_badge, short_id),
+        _ => format!("📝 #{} {} ({}){}  [kind {} | {}]", group, sender, short_npub, owner_badge, kind, short_id),
     }
 }
 
@@ -130,10 +130,10 @@ mod tests {
     }
 
     #[test]
-    fn compact_group_header_guardian() {
-        let header = compact_group_header("test", "Guardian", "npub1xyz789", 9, "event789", true);
+    fn compact_group_header_owner() {
+        let header = compact_group_header("test", "Owner", "npub1xyz789", 9, "event789", true);
         assert!(header.contains("👑"));
-        assert!(header.contains("Guardian"));
+        assert!(header.contains("Owner"));
     }
 
     #[test]
@@ -159,7 +159,7 @@ mod tests {
             content: "Hello".to_string(),
             timestamp: 1000,
             event_id: "event1".to_string(),
-            is_guardian: false,
+            is_owner: false,
         });
         
         group_history.push_back(HistoryMessage {
@@ -168,7 +168,7 @@ mod tests {
             content: "Hi there".to_string(),
             timestamp: 1001,
             event_id: "event2".to_string(),
-            is_guardian: false,
+            is_owner: false,
         });
         
         history.insert("test".to_string(), group_history);

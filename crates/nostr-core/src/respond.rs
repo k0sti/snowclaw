@@ -10,8 +10,8 @@ pub enum RespondMode {
     All,
     /// Only reply when mentioned by name/npub or replied to
     Mention,
-    /// Respond only to guardian's messages
-    Guardian,
+    /// Respond only to owner's messages
+    Owner,
     /// Listen only, never auto-reply
     None,
 }
@@ -20,7 +20,7 @@ impl RespondMode {
     pub fn from_str(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "all" => Self::All,
-            "guardian" => Self::Guardian,
+            "owner" => Self::Owner,
             "none" | "silent" | "listen" => Self::None,
             _ => Self::Mention,
         }
@@ -128,10 +128,10 @@ mod tests {
     use nostr_sdk::prelude::*;
 
     #[test]
-    fn respond_mode_from_str_guardian() {
-        assert_eq!(RespondMode::from_str("guardian"), RespondMode::Guardian);
-        assert_eq!(RespondMode::from_str("Guardian"), RespondMode::Guardian);
-        assert_eq!(RespondMode::from_str("GUARDIAN"), RespondMode::Guardian);
+    fn respond_mode_from_str_owner() {
+        assert_eq!(RespondMode::from_str("owner"), RespondMode::Owner);
+        assert_eq!(RespondMode::from_str("Owner"), RespondMode::Owner);
+        assert_eq!(RespondMode::from_str("OWNER"), RespondMode::Owner);
     }
 
     #[test]
@@ -158,7 +158,7 @@ mod tests {
         let keys = Keys::generate();
         let tags = vec![
             Tag::custom(TagKind::custom("d"), vec!["snowclaw:config:global".to_string()]),
-            Tag::custom(TagKind::custom("respond_mode"), vec!["guardian".to_string()]),
+            Tag::custom(TagKind::custom("respond_mode"), vec!["owner".to_string()]),
         ];
         let event = EventBuilder::new(Kind::Custom(30078), "")
             .tags(tags)
@@ -167,7 +167,7 @@ mod tests {
 
         let (d_tag, gc) = parse_config_event(&event).unwrap();
         assert_eq!(d_tag, "snowclaw:config:global");
-        assert_eq!(gc.respond_mode, Some(RespondMode::Guardian));
+        assert_eq!(gc.respond_mode, Some(RespondMode::Owner));
         assert_eq!(gc.context_history, None);
     }
 
@@ -176,7 +176,7 @@ mod tests {
         let mut dc = DynamicConfig::default();
         
         apply_config_entry(&mut dc, ("snowclaw:config:global".into(), GroupConfig {
-            respond_mode: Some(RespondMode::Guardian),
+            respond_mode: Some(RespondMode::Owner),
             context_history: Some(10),
         }));
         assert!(dc.global.is_some());

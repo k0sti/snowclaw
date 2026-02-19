@@ -24,7 +24,7 @@ pub fn is_task_status_kind(kind: u16) -> bool {
 pub fn build_task_metadata(
     event: &nostr_sdk::Event,
     group: Option<&str>,
-    is_guardian: bool,
+    is_owner: bool,
 ) -> std::collections::HashMap<String, String> {
     let mut meta = std::collections::HashMap::new();
     
@@ -37,8 +37,8 @@ pub fn build_task_metadata(
     if let Some(g) = group {
         meta.insert("nostr_group".to_string(), g.to_string());
     }
-    if is_guardian {
-        meta.insert("nostr_is_guardian".to_string(), "true".to_string());
+    if is_owner {
+        meta.insert("nostr_is_owner".to_string(), "true".to_string());
     }
     
     // Extract task reference from event tags
@@ -91,7 +91,7 @@ mod tests {
         assert_eq!(meta.get("nostr_kind").unwrap(), "1631");
         assert_eq!(meta.get("nostr_task_status").unwrap(), "Done");
         assert_eq!(meta.get("nostr_group").unwrap(), "techteam");
-        assert_eq!(meta.get("nostr_is_guardian").unwrap(), "true");
+        assert_eq!(meta.get("nostr_is_owner").unwrap(), "true");
         assert_eq!(meta.get("nostr_task_ref").unwrap(), "task123");
         assert!(meta.contains_key("nostr_event_id"));
         assert!(meta.contains_key("nostr_pubkey"));

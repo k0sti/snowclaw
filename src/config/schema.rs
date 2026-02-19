@@ -2546,6 +2546,51 @@ pub struct QQConfig {
     pub allowed_users: Vec<String>,
 }
 
+/// Nostr channel configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NostrConfig {
+    /// Relay URLs (e.g. ["wss://zooid.atlantislabs.space"])
+    pub relays: Vec<String>,
+    /// Nostr secret key (nsec1... or hex). Can also be set via SNOWCLAW_NSEC env var.
+    pub nsec: Option<String>,
+    /// NIP-29 group IDs to join (e.g. ["inner-circle", "techteam"])
+    #[serde(default)]
+    pub groups: Vec<String>,
+    /// Listen for NIP-17 gift-wrapped DMs (default: true)
+    #[serde(default = "default_listen_dms")]
+    pub listen_dms: bool,
+    /// Allowed pubkeys (npub1... or hex). Empty = allow all.
+    #[serde(default)]
+    pub allowed_pubkeys: Vec<String>,
+    /// Default respond mode for groups: "all", "mention", "owner", or "none" (default: "mention")
+    #[serde(default = "default_respond_mode")]
+    pub respond_mode: String,
+    /// Per-group respond mode overrides (e.g. { "bot-channel" = "all", "announcements" = "none" })
+    #[serde(default)]
+    pub group_respond_mode: HashMap<String, String>,
+    /// Bot names to match for mention detection (auto-includes profile name)
+    #[serde(default)]
+    pub mention_names: Vec<String>,
+    /// Owner pubkey (npub or hex) — required for owner respond mode and dynamic config
+    #[serde(default)]
+    pub owner: Option<String>,
+    /// Number of recent messages to include as context when responding (default: 20)
+    #[serde(default = "default_context_history")]
+    pub context_history: usize,
+}
+
+fn default_context_history() -> usize {
+    20
+}
+
+fn default_respond_mode() -> String {
+    "mention".to_string()
+}
+
+fn default_listen_dms() -> bool {
+    true
+}
+
 // ── Config impl ──────────────────────────────────────────────────
 
 impl Default for Config {

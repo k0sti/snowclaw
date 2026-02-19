@@ -1799,6 +1799,55 @@ pub async fn doctor_channels(config: Config) -> Result<()> {
         ));
     }
 
+    if let Some(ref nostr_cfg) = config.channels_config.nostr {
+        if let Some(ref nsec_str) = nostr_cfg
+            .nsec
+            .clone()
+            .or_else(|| std::env::var("SNOWCLAW_NSEC").ok())
+        {
+            if let Ok(keys) = nostr_sdk::Keys::parse(nsec_str) {
+                let channel_config = nostr::NostrChannelConfig {
+                    relays: nostr_cfg.relays.clone(),
+                    keys: keys.clone(),
+                    groups: nostr_cfg.groups.clone(),
+                    listen_dms: nostr_cfg.listen_dms,
+                    allowed_pubkeys: nostr_cfg
+                        .allowed_pubkeys
+                        .iter()
+                        .filter_map(|s| nostr_sdk::PublicKey::parse(s).ok())
+                        .collect(),
+                    respond_mode: nostr::RespondMode::from_str(&nostr_cfg.respond_mode),
+                    group_respond_mode: nostr_cfg
+                        .group_respond_mode
+                        .iter()
+                        .map(|(k, v)| (k.clone(), nostr::RespondMode::from_str(v)))
+                        .collect(),
+                    mention_names: {
+                        let mut names: Vec<String> = nostr_cfg
+                            .mention_names
+                            .iter()
+                            .map(|n| n.to_lowercase())
+                            .collect();
+                        // Always include "snowclaw" as a mention trigger
+                        if !names.iter().any(|n| n == "snowclaw") {
+                            names.push("snowclaw".to_string());
+                        }
+                        names
+                    },
+                    owner: nostr_cfg
+                        .owner
+                        .as_ref()
+                        .and_then(|s| nostr_sdk::PublicKey::parse(s).ok()),
+                    context_history: nostr_cfg.context_history,
+                    persist_dir: config.config_path.parent().unwrap_or(std::path::Path::new(".")).to_path_buf(),
+                };
+                if let Ok(ch) = nostr::NostrChannel::new(channel_config).await {
+                    channels.push(("Nostr", Arc::new(ch)));
+                }
+            }
+        }
+    }
+
     if channels.is_empty() {
         println!("No real-time channels configured. Run `zeroclaw onboard` first.");
         return Ok(());
@@ -2156,6 +2205,59 @@ pub async fn start_channels(config: Config) -> Result<()> {
             qq.app_secret.clone(),
             qq.allowed_users.clone(),
         )));
+    }
+
+    if let Some(ref nostr_cfg) = config.channels_config.nostr {
+        let nsec_str = nostr_cfg
+            .nsec
+            .clone()
+            .or_else(|| std::env::var("SNOWCLAW_NSEC").ok())
+            .expect("Nostr nsec required: set in config.toml [channels_config.nostr] nsec field or SNOWCLAW_NSEC env var");
+
+        let keys = nostr_sdk::Keys::parse(&nsec_str)
+            .expect("Invalid Nostr secret key (expected nsec1... or hex)");
+
+        let allowed_pubkeys: Vec<nostr_sdk::PublicKey> = nostr_cfg
+            .allowed_pubkeys
+            .iter()
+            .filter_map(|s| nostr_sdk::PublicKey::parse(s).ok())
+            .collect();
+
+        let channel_config = nostr::NostrChannelConfig {
+            relays: nostr_cfg.relays.clone(),
+            keys: keys.clone(),
+            groups: nostr_cfg.groups.clone(),
+            listen_dms: nostr_cfg.listen_dms,
+            allowed_pubkeys,
+            respond_mode: nostr::RespondMode::from_str(&nostr_cfg.respond_mode),
+            group_respond_mode: nostr_cfg
+                .group_respond_mode
+                .iter()
+                .map(|(k, v)| (k.clone(), nostr::RespondMode::from_str(v)))
+                .collect(),
+            mention_names: {
+                let mut names: Vec<String> = nostr_cfg
+                    .mention_names
+                    .iter()
+                    .map(|n| n.to_lowercase())
+                    .collect();
+                if !names.iter().any(|n| n == "snowclaw") {
+                    names.push("snowclaw".to_string());
+                }
+                names
+            },
+            owner: nostr_cfg
+                .owner
+                .as_ref()
+                .and_then(|s| nostr_sdk::PublicKey::parse(s).ok()),
+            context_history: nostr_cfg.context_history,
+            persist_dir: config.config_path.parent().unwrap_or(std::path::Path::new(".")).to_path_buf(),
+        };
+
+        match nostr::NostrChannel::new(channel_config).await {
+            Ok(nostr_channel) => channels.push(Arc::new(nostr_channel)),
+            Err(e) => tracing::error!("Failed to create Nostr channel: {e}"),
+        }
     }
 
     if channels.is_empty() {

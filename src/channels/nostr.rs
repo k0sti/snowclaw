@@ -11,6 +11,7 @@ use lru::LruCache;
 use nostr_sdk::prelude::*;
 use std::collections::{HashMap, VecDeque};
 use std::num::NonZeroUsize;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{Mutex, RwLock};
@@ -30,8 +31,8 @@ pub enum RespondMode {
     All,
     /// Only reply when mentioned by name/npub or replied to
     Mention,
-    /// Respond only to guardian's messages
-    Guardian,
+    /// Respond only to owner's messages
+    Owner,
     /// Listen only, never auto-reply
     None,
 }
@@ -40,7 +41,7 @@ impl RespondMode {
     pub fn from_str(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "all" => Self::All,
-            "guardian" => Self::Guardian,
+            "owner" => Self::Owner,
             "none" | "silent" | "listen" => Self::None,
             _ => Self::Mention,
         }
@@ -55,7 +56,7 @@ pub struct HistoryMessage {
     pub content: String,
     pub timestamp: u64,
     pub event_id: String,
-    pub is_guardian: bool,
+    pub is_owner: bool,
 }
 
 /// Per-group dynamic configuration loaded from NIP-78 kind 30078 events.
@@ -92,8 +93,8 @@ pub struct NostrChannelConfig {
     pub group_respond_mode: HashMap<String, RespondMode>,
     /// Names to match for mention detection (lowercased)
     pub mention_names: Vec<String>,
-    /// Guardian pubkey (for guardian mode + dynamic config)
-    pub guardian: Option<PublicKey>,
+    /// Owner pubkey (for owner mode + dynamic config)
+    pub owner: Option<PublicKey>,
     /// Number of recent messages to include as context (default: 20)
     pub context_history: usize,
     /// Directory for persisting nostr memory (defaults to ~/.snowclaw)
@@ -117,7 +118,7 @@ struct CachedProfile {
 /// - Profile resolution (pubkey → display name)
 /// - LRU event cache for raw event retrieval
 /// - Per-group message ring buffer for conversation context
-/// - Dynamic config via NIP-78 kind 30078 events from guardian
+/// - Dynamic config via NIP-78 kind 30078 events from owner
 pub struct NostrChannel {
     config: NostrChannelConfig,
     client: Client,
@@ -127,6 +128,8 @@ pub struct NostrChannel {
     dynamic_config: Arc<RwLock<DynamicConfig>>,
     key_filter: KeyFilter,
     memory: NostrMemory,
+    /// NIP-AE: whether bidirectional owner verification is confirmed (kind 14199)
+    owner_verified: Arc<AtomicBool>,
 }
 
 impl NostrChannel {
@@ -156,8 +159,8 @@ impl NostrChannel {
         let key_filter = KeyFilter::new();
         // Our own pubkey
         key_filter.add_known_pubkey(&config.keys.public_key().to_hex());
-        // Guardian pubkey
-        if let Some(ref g) = config.guardian {
+        // Owner pubkey
+        if let Some(ref g) = config.owner {
             key_filter.add_known_pubkey(&g.to_hex());
         }
         // Allowed pubkeys
@@ -174,9 +177,10 @@ impl NostrChannel {
             dynamic_config: Arc::new(RwLock::new(DynamicConfig::default())),
             key_filter,
             memory,
+            owner_verified: Arc::new(AtomicBool::new(false)),
         };
 
-        // Load existing dynamic config from guardian's NIP-78 events
+        // Load existing dynamic config from owner's NIP-78 events
         channel.load_dynamic_config().await;
 
         // Backfill ring buffer with recent group messages from relay
@@ -184,6 +188,9 @@ impl NostrChannel {
 
         // Publish agent state (kind 31121) — announce we're online
         channel.publish_agent_state().await;
+
+        // Publish profile with NIP-AE bot tag
+        channel.publish_profile_with_bot_tag().await;
 
         Ok(channel)
     }
@@ -223,7 +230,7 @@ impl NostrChannel {
 
                     let sender_name = self.resolve_name(&event.pubkey).await;
                     let sender_npub = event.pubkey.to_bech32().unwrap_or_else(|_| event.pubkey.to_hex());
-                    let is_guardian = self.is_from_guardian(&event);
+                    let is_owner = self.is_from_owner(&event);
 
                     self.push_history(
                         &group,
@@ -233,7 +240,7 @@ impl NostrChannel {
                             content: event.content.clone(),
                             timestamp: event.created_at.as_secs(),
                             event_id: event.id.to_hex(),
-                            is_guardian,
+                            is_owner,
                         },
                     ).await;
                     count += 1;
@@ -246,16 +253,16 @@ impl NostrChannel {
         }
     }
 
-    /// Load existing NIP-78 config events from guardian on startup
+    /// Load existing NIP-78 config events from owner on startup
     async fn load_dynamic_config(&self) {
-        let guardian = match &self.config.guardian {
+        let owner = match &self.config.owner {
             Some(g) => *g,
             None => return,
         };
 
         let filter = Filter::new()
             .kind(Kind::Custom(30078))
-            .author(guardian);
+            .author(owner);
 
         match tokio::time::timeout(
             Duration::from_secs(5),
@@ -270,7 +277,7 @@ impl NostrChannel {
                         Self::apply_config_entry(&mut config, parsed);
                     }
                 }
-                info!("Loaded dynamic config from guardian");
+                info!("Loaded dynamic config from owner");
             }
             Ok(Err(e)) => warn!("Failed to fetch dynamic config: {e}"),
             Err(_) => warn!("Timeout fetching dynamic config"),
@@ -398,7 +405,7 @@ impl NostrChannel {
                 continue;
             }
             let short_npub = Self::truncate_npub(&msg.npub);
-            let role = if msg.is_guardian { " role=guardian" } else { "" };
+            let role = if msg.is_owner { " role=owner" } else { "" };
             ctx.push_str(&format!("<{} npub={}{}>  {}\n", msg.sender, short_npub, role, msg.content));
         }
         if ctx == "[Recent conversation context]\n" {
@@ -408,13 +415,13 @@ impl NostrChannel {
         ctx
     }
 
-    /// Build a guardian identity line for LLM context.
-    pub async fn guardian_context_line(&self) -> String {
-        match &self.config.guardian {
-            Some(guardian) => {
-                let name = self.resolve_name(guardian).await;
-                let npub = guardian.to_bech32().unwrap_or_else(|_| guardian.to_hex());
-                format!("[Guardian: {} ({})]\n", name, npub)
+    /// Build a owner identity line for LLM context.
+    pub async fn owner_context_line(&self) -> String {
+        match &self.config.owner {
+            Some(owner) => {
+                let name = self.resolve_name(owner).await;
+                let npub = owner.to_bech32().unwrap_or_else(|_| owner.to_hex());
+                format!("[Owner: {} ({})]\n", name, npub)
             }
             None => String::new(),
         }
@@ -426,11 +433,11 @@ impl NostrChannel {
     }
 
     /// Build compact header for group messages.
-    fn compact_group_header(group: &str, sender: &str, npub: &str, kind: u16, event_id: &str, is_guardian: bool) -> String {
+    fn compact_group_header(group: &str, sender: &str, npub: &str, kind: u16, event_id: &str, is_owner: bool) -> String {
         let short_id = &event_id[..8.min(event_id.len())];
         let short_npub = Self::truncate_npub(npub);
-        if is_guardian {
-            format!("[nostr:group=#{group} from={sender} npub={short_npub} role=guardian kind={kind} id={short_id}]")
+        if is_owner {
+            format!("[nostr:group=#{group} from={sender} npub={short_npub} role=owner kind={kind} id={short_id}]")
         } else {
             format!("[nostr:group=#{group} from={sender} npub={short_npub} kind={kind} id={short_id}]")
         }
@@ -448,7 +455,7 @@ impl NostrChannel {
     }
 
     /// Build metadata HashMap for a Nostr event.
-    fn build_metadata(event: &Event, group: Option<&str>, is_guardian: bool) -> Option<HashMap<String, String>> {
+    fn build_metadata(event: &Event, group: Option<&str>, is_owner: bool) -> Option<HashMap<String, String>> {
         let mut meta = HashMap::new();
         meta.insert("nostr_event_id".into(), event.id.to_hex());
         meta.insert("nostr_pubkey".into(), event.pubkey.to_hex());
@@ -456,8 +463,8 @@ impl NostrChannel {
         if let Some(g) = group {
             meta.insert("nostr_group".into(), g.to_string());
         }
-        if is_guardian {
-            meta.insert("nostr_is_guardian".into(), "true".into());
+        if is_owner {
+            meta.insert("nostr_is_owner".into(), "true".into());
         }
         Some(meta)
     }
@@ -587,13 +594,19 @@ impl NostrChannel {
             .since(Timestamp::now());
         filters.push(task_status_filter);
 
-        // NIP-78 dynamic config events from guardian (kind 30078)
-        if let Some(guardian) = &self.config.guardian {
+        // NIP-78 dynamic config events from owner (kind 30078)
+        // NIP-AE owner claim events (kind 14199)
+        if let Some(owner) = &self.config.owner {
             let config_filter = Filter::new()
                 .kind(Kind::Custom(30078))
-                .author(*guardian)
+                .author(*owner)
                 .since(Timestamp::now());
             filters.push(config_filter);
+
+            let owner_claims_filter = Filter::new()
+                .kind(Kind::Custom(14199))
+                .author(*owner);
+            filters.push(owner_claims_filter);
         }
 
         // Action protocol: kind 1121 (action requests targeting this agent)
@@ -631,10 +644,10 @@ impl NostrChannel {
         self.config.allowed_pubkeys.is_empty() || self.config.allowed_pubkeys.contains(pubkey)
     }
 
-    /// Check if event is from the guardian
-    fn is_from_guardian(&self, event: &Event) -> bool {
-        match &self.config.guardian {
-            Some(guardian) => event.pubkey == *guardian,
+    /// Check if event is from the owner
+    fn is_from_owner(&self, event: &Event) -> bool {
+        match &self.config.owner {
+            Some(owner) => event.pubkey == *owner,
             None => false,
         }
     }
@@ -698,9 +711,9 @@ impl NostrChannel {
         false
     }
 
-    /// Check if a non-guardian pubkey is allowed to perform an action
+    /// Check if a non-owner pubkey is allowed to perform an action
     fn is_action_allowed(&self, _action: &str, pubkey: &PublicKey) -> bool {
-        // For now: allowed pubkeys can do anything that's not guardian-only
+        // For now: allowed pubkeys can do anything that's not owner-only
         // TODO: implement per-action permission checks from config
         self.is_allowed(pubkey)
     }
@@ -773,6 +786,42 @@ impl NostrChannel {
         match self.client.send_event_builder(builder).await {
             Ok(output) => info!("Published agent state (online): {}", output.val),
             Err(e) => warn!("Failed to publish agent state: {e}"),
+        }
+    }
+
+    /// Publish kind:0 profile with NIP-AE bot tag and owner p-tag.
+    /// Fetches existing metadata from relay to preserve name/about/picture, then republishes with tags.
+    async fn publish_profile_with_bot_tag(&self) {
+        // Fetch existing kind:0 content from relay
+        let filter = Filter::new()
+            .author(self.config.keys.public_key())
+            .kind(Kind::Metadata)
+            .limit(1);
+
+        let existing_content = match tokio::time::timeout(
+            Duration::from_secs(5),
+            self.client.fetch_events(filter, Duration::from_secs(5)),
+        )
+        .await
+        {
+            Ok(Ok(events)) => events
+                .into_iter()
+                .next()
+                .map(|e| e.content.clone())
+                .unwrap_or_else(|| "{}".to_string()),
+            _ => "{}".to_string(),
+        };
+
+        // Build tags: bot tag + optional owner p-tag
+        let mut tags: Vec<Tag> = vec![Tag::custom(TagKind::Custom("bot".into()), Vec::<String>::new())];
+        if let Some(owner) = &self.config.owner {
+            tags.push(Tag::public_key(*owner));
+        }
+
+        let builder = EventBuilder::new(Kind::Metadata, &existing_content).tags(tags);
+        match self.client.send_event_builder(builder).await {
+            Ok(output) => info!("Published profile with NIP-AE bot tag: {}", output.val),
+            Err(e) => warn!("Failed to publish profile with bot tag: {e}"),
         }
     }
 
@@ -1010,7 +1059,7 @@ impl Channel for NostrChannel {
                         .unwrap_or_default()
                         .as_secs(),
                     event_id: event_id.to_hex(),
-                    is_guardian: false,
+                    is_owner: false,
                 },
             )
             .await;
@@ -1070,13 +1119,28 @@ impl Channel for NostrChannel {
                         let kind = event.kind.as_u16();
 
                         match kind {
-                            // NIP-78 dynamic config events from guardian
+                            // NIP-AE owner claim (kind 14199) — verify bidirectional ownership
+                            14199 => {
+                                if self.is_from_owner(&event) {
+                                    let our_pk = self.config.keys.public_key();
+                                    let claimed = event.tags.iter().any(|tag| {
+                                        tag.as_slice().first().map(|s| s.as_str()) == Some("p")
+                                            && tag.as_slice().get(1).map(|s| s.as_str()) == Some(our_pk.to_hex().as_str())
+                                    });
+                                    if claimed {
+                                        self.owner_verified.store(true, Ordering::Relaxed);
+                                        info!("NIP-AE: Bidirectional owner verification confirmed via kind 14199");
+                                    }
+                                }
+                            }
+
+                            // NIP-78 dynamic config events from owner
                             30078 => {
-                                if self.is_from_guardian(&event) {
+                                if self.is_from_owner(&event) {
                                     if let Some(parsed) = Self::parse_config_event(&event) {
                                         let mut dc = self.dynamic_config.write().await;
                                         Self::apply_config_entry(&mut dc, parsed);
-                                        info!("Updated dynamic config from guardian event {}", event.id.to_hex());
+                                        info!("Updated dynamic config from owner event {}", event.id.to_hex());
                                     }
                                 }
                             }
@@ -1096,7 +1160,7 @@ impl Channel for NostrChannel {
                                 let sender_name = self.resolve_name(&event.pubkey).await;
                                 let sender_npub = event.pubkey.to_bech32().unwrap_or_else(|_| event.pubkey.to_hex());
                                 let event_id_hex = event.id.to_hex();
-                                let is_guardian = self.is_from_guardian(&event);
+                                let is_owner = self.is_from_owner(&event);
 
                                 // Register sender pubkey as known (safe hex)
                                 self.key_filter.add_known_pubkey(&event.pubkey.to_hex());
@@ -1106,15 +1170,15 @@ impl Channel for NostrChannel {
                                 let (sanitized_content, flags) = self.key_filter.sanitize(&event.content, &sanitize_ctx);
                                 if !flags.is_empty() {
                                     key_filter::log_flags(&flags);
-                                    // Alert guardian via DM if nsec was detected
+                                    // Alert owner via DM if nsec was detected
                                     if flags.iter().any(|f| f.kind == key_filter::SecurityFlagKind::NsecDetected) {
-                                        if let Some(guardian) = &self.config.guardian {
+                                        if let Some(owner) = &self.config.owner {
                                             let alert = format!(
                                                 "⚠️ Secret key (nsec) detected in message from {} in #{} — redacted before LLM processing",
                                                 sender_npub, group
                                             );
-                                            if let Err(e) = self.send_dm(guardian, &alert).await {
-                                                warn!("Failed to alert guardian about nsec detection: {e}");
+                                            if let Err(e) = self.send_dm(owner, &alert).await {
+                                                warn!("Failed to alert owner about nsec detection: {e}");
                                             }
                                         }
                                     }
@@ -1135,13 +1199,13 @@ impl Channel for NostrChannel {
                                 self.memory.ensure_group(&group, event.created_at.as_secs()).await;
                                 self.memory.record_group_member(&group, &sender_hex).await;
 
-                                // Guardian killswitch and soft controls
-                                if is_guardian {
+                                // Owner killswitch and soft controls
+                                if is_owner {
                                     let cmd = event.content.trim().to_lowercase();
 
                                     // HALT = nuclear killswitch — all groups go silent
                                     if cmd == "halt" {
-                                        warn!("🛑 HALT from guardian — all processing stopped");
+                                        warn!("🛑 HALT from owner — all processing stopped");
                                         let mut dc = self.dynamic_config.write().await;
                                         // Set all configured groups to none
                                         for g in &self.config.groups {
@@ -1156,7 +1220,7 @@ impl Channel for NostrChannel {
 
                                     // Soft stop: group-specific
                                     if cmd == "stop" {
-                                        warn!("🛑 Stop from guardian in #{}", group);
+                                        warn!("🛑 Stop from owner in #{}", group);
                                         let mut dc = self.dynamic_config.write().await;
                                         let gc = dc.groups.entry(group.clone()).or_insert_with(GroupConfig::default);
                                         gc.respond_mode = Some(RespondMode::None);
@@ -1168,7 +1232,7 @@ impl Channel for NostrChannel {
                                         let mode_str = cmd.strip_prefix("resume").unwrap_or("mention").trim();
                                         let mode_str = if mode_str.is_empty() { "mention" } else { mode_str };
                                         let new_mode = RespondMode::from_str(mode_str);
-                                        warn!("▶️ Guardian resumed #{} to {:?}", group, new_mode);
+                                        warn!("▶️ Owner resumed #{} to {:?}", group, new_mode);
                                         let mut dc = self.dynamic_config.write().await;
                                         let gc = dc.groups.entry(group.clone()).or_insert_with(GroupConfig::default);
                                         gc.respond_mode = Some(new_mode.clone());
@@ -1191,7 +1255,7 @@ impl Channel for NostrChannel {
                                         content: sanitized_content.clone(),
                                         timestamp: event.created_at.as_secs(),
                                         event_id: event_id_hex.clone(),
-                                        is_guardian,
+                                        is_owner,
                                     },
                                 )
                                 .await;
@@ -1203,9 +1267,9 @@ impl Channel for NostrChannel {
                                         debug!("Skipping group message (respond_mode=none): #{}", group);
                                         continue;
                                     }
-                                    RespondMode::Guardian => {
-                                        if !is_guardian {
-                                            debug!("Skipping group message (not from guardian): #{}", group);
+                                    RespondMode::Owner => {
+                                        if !is_owner {
+                                            debug!("Skipping group message (not from owner): #{}", group);
                                             continue;
                                         }
                                     }
@@ -1225,11 +1289,11 @@ impl Channel for NostrChannel {
                                     &sender_npub,
                                     kind,
                                     &event_id_hex,
-                                    is_guardian,
+                                    is_owner,
                                 );
 
-                                // Prepend guardian identity + memory + conversation context
-                                let guardian_line = self.guardian_context_line().await;
+                                // Prepend owner identity + memory + conversation context
+                                let owner_line = self.owner_context_line().await;
                                 let memory_context = self.memory.build_context(&sender_hex, &group).await;
                                 let history_context = self.format_history_context(&group, &event_id_hex).await;
 
@@ -1240,7 +1304,7 @@ impl Channel for NostrChannel {
                                 };
 
                                 let content =
-                                    format!("{}{}{}{}{}\n{}", guardian_line, mode_guidance, memory_context, history_context, header, sanitized_content);
+                                    format!("{}{}{}{}{}\n{}", owner_line, mode_guidance, memory_context, history_context, header, sanitized_content);
 
                                 let msg = ChannelMessage {
                                     id: event_id_hex.clone(),
@@ -1249,7 +1313,7 @@ impl Channel for NostrChannel {
                                     content,
                                     channel: format!("nostr:#{}", group),
                                     timestamp: event.created_at.as_secs(),
-                                    metadata: Self::build_metadata(&event, Some(&group), is_guardian),
+                                    metadata: Self::build_metadata(&event, Some(&group), is_owner),
                                 };
 
                                 if tx.send(msg).await.is_err() {
@@ -1334,19 +1398,19 @@ impl Channel for NostrChannel {
                                 });
 
                                 let sender_name = self.resolve_name(&event.pubkey).await;
-                                let is_guardian = self.is_from_guardian(&event);
+                                let is_owner = self.is_from_owner(&event);
 
                                 if let Some(action) = action {
-                                    info!("📩 Action request from {} (guardian={}): {}", sender_name, is_guardian, action);
+                                    info!("📩 Action request from {} (owner={}): {}", sender_name, is_owner, action);
 
-                                    // Check permissions: control.* and config.set are guardian-only
-                                    let guardian_only = action.starts_with("control.stop")
+                                    // Check permissions: control.* and config.set are owner-only
+                                    let owner_only = action.starts_with("control.stop")
                                         || action.starts_with("control.resume")
                                         || action == "config.set";
-                                    let allowed = if guardian_only {
-                                        is_guardian
+                                    let allowed = if owner_only {
+                                        is_owner
                                     } else {
-                                        is_guardian || self.is_action_allowed(&action, &event.pubkey)
+                                        is_owner || self.is_action_allowed(&action, &event.pubkey)
                                     };
 
                                     if !allowed {
@@ -1463,7 +1527,7 @@ mod tests {
             respond_mode: RespondMode::Mention,
             group_respond_mode: HashMap::new(),
             mention_names: vec!["snowclaw".to_string()],
-            guardian: None,
+            owner: None,
             context_history: 20,
             persist_dir: std::path::PathBuf::from("/tmp"),
         };
@@ -1475,10 +1539,10 @@ mod tests {
     }
 
     #[test]
-    fn respond_mode_from_str_guardian() {
-        assert_eq!(RespondMode::from_str("guardian"), RespondMode::Guardian);
-        assert_eq!(RespondMode::from_str("Guardian"), RespondMode::Guardian);
-        assert_eq!(RespondMode::from_str("GUARDIAN"), RespondMode::Guardian);
+    fn respond_mode_from_str_owner() {
+        assert_eq!(RespondMode::from_str("owner"), RespondMode::Owner);
+        assert_eq!(RespondMode::from_str("Owner"), RespondMode::Owner);
+        assert_eq!(RespondMode::from_str("OWNER"), RespondMode::Owner);
     }
 
     #[test]
@@ -1516,10 +1580,10 @@ mod tests {
     }
 
     #[test]
-    fn compact_group_header_guardian() {
+    fn compact_group_header_owner() {
         let header =
             NostrChannel::compact_group_header("techteam", "k0sh", "npub1abcdef1234567890abcdef", 9, "abcdef1234567890", true);
-        assert_eq!(header, "[nostr:group=#techteam from=k0sh npub=npub1abcdef123456789 role=guardian kind=9 id=abcdef12]");
+        assert_eq!(header, "[nostr:group=#techteam from=k0sh npub=npub1abcdef123456789 role=owner kind=9 id=abcdef12]");
     }
 
     #[test]
@@ -1564,7 +1628,7 @@ mod tests {
         assert_eq!(meta.get("nostr_pubkey").unwrap(), &event.pubkey.to_hex());
         assert_eq!(meta.get("nostr_kind").unwrap(), "9");
         assert_eq!(meta.get("nostr_group").unwrap(), "mygroup");
-        assert_eq!(meta.get("nostr_is_guardian").unwrap(), "true");
+        assert_eq!(meta.get("nostr_is_owner").unwrap(), "true");
     }
 
     #[test]
@@ -1576,7 +1640,7 @@ mod tests {
 
         let meta = NostrChannel::build_metadata(&event, None, false).unwrap();
         assert!(!meta.contains_key("nostr_group"));
-        assert!(!meta.contains_key("nostr_is_guardian"));
+        assert!(!meta.contains_key("nostr_is_owner"));
         assert_eq!(meta.get("nostr_kind").unwrap(), "1631");
     }
 
@@ -1604,7 +1668,7 @@ mod tests {
         let keys = Keys::generate();
         let tags = vec![
             Tag::custom(TagKind::custom("d"), vec!["snowclaw:config:global".to_string()]),
-            Tag::custom(TagKind::custom("respond_mode"), vec!["guardian".to_string()]),
+            Tag::custom(TagKind::custom("respond_mode"), vec!["owner".to_string()]),
         ];
         let event = EventBuilder::new(Kind::Custom(30078), "")
             .tags(tags)
@@ -1613,7 +1677,7 @@ mod tests {
 
         let (d_tag, gc) = NostrChannel::parse_config_event(&event).unwrap();
         assert_eq!(d_tag, "snowclaw:config:global");
-        assert_eq!(gc.respond_mode, Some(RespondMode::Guardian));
+        assert_eq!(gc.respond_mode, Some(RespondMode::Owner));
         assert_eq!(gc.context_history, None);
     }
 
@@ -1622,7 +1686,7 @@ mod tests {
         let mut dc = DynamicConfig::default();
         
         NostrChannel::apply_config_entry(&mut dc, ("snowclaw:config:global".into(), GroupConfig {
-            respond_mode: Some(RespondMode::Guardian),
+            respond_mode: Some(RespondMode::Owner),
             context_history: Some(10),
         }));
         assert!(dc.global.is_some());

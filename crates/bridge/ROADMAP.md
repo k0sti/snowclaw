@@ -50,7 +50,7 @@ Snowclaw's `channels/nostr.rs` (1,681 lines) is the reference. Here's what the b
 | Conversation context (ring buffer) | ✅ | ❌ | Snowclaw sends last N messages as context to LLM |
 | Compact message headers | ✅ | ❌ | `[nostr:group=#x from=y ...]` format for efficient LLM context |
 | Mention detection | ✅ | ❌ | Name/npub/p-tag matching for respond-mode filtering |
-| Respond mode (all/mention/guardian/none) | ✅ | ❌ | Controls when agent should reply vs stay silent |
+| Respond mode (all/mention/owner/none) | ✅ | ❌ | Controls when agent should reply vs stay silent |
 | Content sanitization (key filter) | ✅ | ❌ | Redacts nsec/private keys from messages before LLM |
 
 ### 🟡 Important (agent coordination)
@@ -59,10 +59,10 @@ Snowclaw's `channels/nostr.rs` (1,681 lines) is the reference. Here's what the b
 |---------|----------|--------|-----|
 | NIP-17 gift-wrapped DMs (kind 1059) | ✅ | ❌ | Bridge uses old kind 4, Snowclaw uses NIP-17 |
 | NIP-04 DM decryption | ✅ | ❌ stub | Returns `[encrypted]` |
-| Guardian controls (halt/stop/resume) | ✅ | ❌ | Text commands + dynamic config |
+| Owner controls (halt/stop/resume) | ✅ | ❌ | Text commands + dynamic config |
 | Action protocol (kind 1121) | ✅ | ❌ | Remote control via Nostr events |
 | Agent state (kind 31121) | ✅ | ❌ | Publish/read agent online status |
-| NIP-78 dynamic config (kind 30078) | ✅ | ❌ | Runtime config changes via guardian |
+| NIP-78 dynamic config (kind 30078) | ✅ | ❌ | Runtime config changes via owner |
 | Task status events (kind 1630-1637) | ✅ | ❌ | Nostr-native task tracking |
 
 ### 🟢 Nice-to-have (memory & awareness)
@@ -104,11 +104,11 @@ Snowclaw's `channels/nostr.rs` (1,681 lines) is the reference. Here's what the b
 
 8. **Action protocol** (kind 1121) — Accept remote commands (ping, stop, resume, config).
 
-9. **Guardian controls** — HALT/stop/resume commands from guardian pubkey.
+9. **Owner controls** — HALT/stop/resume commands from owner pubkey.
 
 10. **NIP-17 DMs** — Replace kind 4 with gift-wrapped DMs (kind 1059) using `nostr-sdk`'s `send_private_msg`.
 
-11. **Dynamic config** (kind 30078) — Runtime config from guardian events.
+11. **Dynamic config** (kind 30078) — Runtime config from owner events.
 
 ### Phase 3: Memory & Persistence
 **Goal:** Bridge maintains rich context across restarts.
@@ -141,7 +141,7 @@ Most of this can be extracted with minimal changes — the bridge just delivers 
 # New fields for Phase 1
 [groups]
 subscribe = ["techteam", "inner-circle"]
-respond_mode = "mention"  # default: all | mention | guardian | none
+respond_mode = "mention"  # default: all | mention | owner | none
 context_history = 20       # messages to include as context
 
 [groups.overrides.techteam]
@@ -149,7 +149,7 @@ respond_mode = "all"
 
 [identity]
 mention_names = ["clarity", "snowflake"]  # trigger mention detection
-guardian = "npub1..."  # guardian pubkey for controls
+owner = "npub1..."  # owner pubkey for controls
 
 # Phase 2
 [agent]
