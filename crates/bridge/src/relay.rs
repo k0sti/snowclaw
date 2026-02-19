@@ -100,60 +100,63 @@ impl RelayClient {
 
         tokio::spawn(async move {
             info!("Event stream listening...");
-            let mut notifications = client.notifications();
+            let tx = tx;
+            let result = client.handle_notifications(|notification| {
+                let tx = tx.clone();
+                async move {
+                    match notification {
+                        RelayPoolNotification::Event { event, .. } => {
+                            if event.pubkey == our_pubkey {
+                                return Ok(false);
+                            }
 
-            loop {
-                match notifications.recv().await {
-                    Ok(RelayPoolNotification::Event { event, .. }) => {
-                        if event.pubkey == our_pubkey {
-                            continue;
+                            let kind_num = event.kind.as_u16();
+                            let relay_event = match kind_num {
+                                9 => {
+                                    let group = event.tags.iter()
+                                        .find(|t| t.kind() == TagKind::h())
+                                        .and_then(|t| t.content())
+                                        .map(|s| s.to_string())
+                                        .unwrap_or_else(|| "unknown".to_string());
+                                    
+                                    debug!("Group msg #{} from {}", group, &event.pubkey.to_hex()[..8]);
+                                    Some(RelayEvent::GroupMessage { 
+                                        event: event.as_ref().clone(), group 
+                                    })
+                                }
+                                4 => {
+                                    debug!("DM from {}", &event.pubkey.to_hex()[..8]);
+                                    Some(RelayEvent::DirectMessage { 
+                                        event: event.as_ref().clone() 
+                                    })
+                                }
+                                0 => {
+                                    debug!("Profile from {}", &event.pubkey.to_hex()[..8]);
+                                    Some(RelayEvent::ProfileUpdate { 
+                                        event: event.as_ref().clone() 
+                                    })
+                                }
+                                _ => None,
+                            };
+
+                            if let Some(re) = relay_event {
+                                if tx.send(re).await.is_err() {
+                                    warn!("Event receiver dropped");
+                                    return Ok(true); // exit
+                                }
+                            }
                         }
-
-                        let kind_num = event.kind.as_u16();
-                        let relay_event = match kind_num {
-                            9 => {
-                                let group = event.tags.iter()
-                                    .find(|t| t.kind() == TagKind::h())
-                                    .and_then(|t| t.content())
-                                    .map(|s| s.to_string())
-                                    .unwrap_or_else(|| "unknown".to_string());
-                                
-                                debug!("Group msg #{} from {}", group, &event.pubkey.to_hex()[..8]);
-                                Some(RelayEvent::GroupMessage { 
-                                    event: event.as_ref().clone(), group 
-                                })
-                            }
-                            4 => {
-                                debug!("DM from {}", &event.pubkey.to_hex()[..8]);
-                                Some(RelayEvent::DirectMessage { 
-                                    event: event.as_ref().clone() 
-                                })
-                            }
-                            0 => {
-                                debug!("Profile from {}", &event.pubkey.to_hex()[..8]);
-                                Some(RelayEvent::ProfileUpdate { 
-                                    event: event.as_ref().clone() 
-                                })
-                            }
-                            _ => None,
-                        };
-
-                        if let Some(re) = relay_event {
-                            if tx.send(re).await.is_err() {
-                                warn!("Event receiver dropped");
-                                return;
-                            }
+                        RelayPoolNotification::Message { message, .. } => {
+                            debug!("Relay msg: {:?}", message);
                         }
+                        _ => {}
                     }
-                    Ok(RelayPoolNotification::Message { message, .. }) => {
-                        debug!("Relay msg: {:?}", message);
-                    }
-                    Ok(_) => {}
-                    Err(e) => {
-                        error!("Notification error: {}", e);
-                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                    }
+                    Ok(false) // continue
                 }
+            }).await;
+
+            if let Err(e) = result {
+                error!("handle_notifications ended with error: {}", e);
             }
         });
     }
