@@ -67,15 +67,11 @@ impl Bridge {
     pub async fn start(&mut self) -> Result<()> {
         info!("Starting Nostr bridge");
 
-        // Connect to relay and create notification receiver BEFORE subscribing
-        let notifications;
+        // Connect to relay
         {
             let mut relay = self.state.relay.write().await;
             relay.connect().await
                 .with_context(|| "Failed to connect to relay")?;
-
-            // Create receiver BEFORE subscribe so we catch backfill + live events
-            notifications = relay.notifications();
 
             if !self.state.config.groups.subscribe.is_empty() {
                 relay.subscribe_groups(&self.state.config.groups.subscribe).await
@@ -90,10 +86,11 @@ impl Bridge {
         self.state.webhook.test_webhook().await
             .with_context(|| "Webhook connectivity test failed")?;
 
-        // Start event stream via mpsc channel with pre-created receiver
+        // Start event stream — create notifications receiver and spawn immediately
         let (event_tx, event_rx) = mpsc::channel(1000);
         {
             let relay = self.state.relay.read().await;
+            let notifications = relay.notifications();
             relay.start_event_stream(event_tx, notifications);
         }
 
