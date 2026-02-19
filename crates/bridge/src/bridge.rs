@@ -157,7 +157,7 @@ impl Bridge {
                 state.cache.store_raw(
                     &event_id_hex,
                     &author_hex,
-                    event.created_at.as_u64() as i64,
+                    event.created_at.as_secs() as i64,
                     event.kind.as_u16() as i64,
                     &serde_json::to_string(&event.tags)?,
                     &event.content,
@@ -171,7 +171,7 @@ impl Bridge {
 
                 state.webhook.deliver_group_message_raw(
                     &event_id_hex, &group, &author_name, &preview, 
-                    event.created_at.as_u64() as i64,
+                    event.created_at.as_secs() as i64,
                 ).await?;
 
                 info!("#{} {} : {}", group, author_name, &preview[..preview.len().min(60)]);
@@ -187,7 +187,7 @@ impl Bridge {
                 state.cache.store_raw(
                     &event_id_hex,
                     &author_hex,
-                    event.created_at.as_u64() as i64,
+                    event.created_at.as_secs() as i64,
                     event.kind.as_u16() as i64,
                     &serde_json::to_string(&event.tags)?,
                     &event.content,
@@ -200,7 +200,7 @@ impl Bridge {
 
                 state.webhook.deliver_dm_raw(
                     &event_id_hex, &author_name, &preview,
-                    event.created_at.as_u64() as i64,
+                    event.created_at.as_secs() as i64,
                 ).await?;
 
                 info!("DM from {}: {}", author_name, &preview[..preview.len().min(60)]);
