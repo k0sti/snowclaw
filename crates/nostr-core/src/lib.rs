@@ -11,6 +11,7 @@ pub mod memory;
 pub mod mention;
 pub mod relay;
 pub mod respond;
+pub mod ring_buffer;
 pub mod tasks;
 
 // Re-export commonly used types
@@ -25,12 +26,16 @@ pub use key_filter::{log_flags, KeyFilter, KeyFilterMetrics, SecurityFlag, Secur
 pub use memory::{
     GroupMemory, NostrMemory, NostrMemoryStore, NpubMemory, ProfileMetadata,
 };
-pub use mention::is_mentioned;
+pub use mention::{
+    detect_mentions, extract_mentioned_pubkeys, is_mentioned, mentions_pubkey, 
+    sanitize_content_preview, Mention, MentionType,
+};
 pub use relay::RelayClient;
 pub use respond::{
     apply_config_entry, parse_config_event, respond_mode_for_group, DynamicConfig, GroupConfig,
     RespondMode,
 };
+pub use ring_buffer::{ConversationRingBuffer, GroupRingBuffer, MessageEntry};
 pub use tasks::{build_task_metadata, is_task_status_kind, status_name_for_kind};
 
 // Re-export nostr-sdk for convenience
