@@ -7,11 +7,15 @@ use tokio::time::interval;
 use tracing::{info, warn, error, debug};
 use nostr_sdk::{EventId, PublicKey, Keys};
 
-use crate::config::Config;
+use crate::config::{Config, RespondMode};
 use crate::cache::{EventCache, CacheStats};
 use crate::profiles::ProfileCache;
 use crate::relay::{RelayClient, RelayEvent};
 use crate::webhook::WebhookDeliverer;
+use nostr_core::{
+    ConversationRingBuffer, MessageEntry, detect_mentions, mentions_pubkey,
+    sanitize_content_preview,
+};
 
 pub struct BridgeState {
     pub config: Config,
@@ -20,6 +24,7 @@ pub struct BridgeState {
     pub relay: Arc<RwLock<RelayClient>>,
     pub webhook: WebhookDeliverer,
     pub start_time: Instant,
+    pub ring_buffer: ConversationRingBuffer,
 }
 
 pub struct Bridge {
@@ -51,6 +56,7 @@ impl Bridge {
             relay: Arc::new(RwLock::new(relay)),
             webhook,
             start_time: Instant::now(),
+            ring_buffer: ConversationRingBuffer::new(50), // Default 50 messages per group
         });
 
         let (shutdown_tx, _) = broadcast::channel(1);
@@ -154,6 +160,7 @@ impl Bridge {
                     return Ok(());
                 }
 
+                // Store event in cache
                 state.cache.store_raw(
                     &event_id_hex,
                     &author_hex,
@@ -167,14 +174,58 @@ impl Bridge {
 
                 let author_name = state.profiles.get_display_name_hex(&author_hex).await;
 
-                let preview: String = event.content.chars().take(state.config.webhook.preview_length).collect();
+                // Phase 1: Content sanitization
+                let preview = sanitize_content_preview(&event.content, state.config.webhook.preview_length);
 
-                state.webhook.deliver_group_message_raw(
-                    &event_id_hex, &group, &author_name, &preview, 
-                    event.created_at.as_secs() as i64,
-                ).await?;
+                // Phase 1: Mention detection
+                let known_pubkeys = state.profiles.get_known_pubkeys().await;
+                let detected_mentions = detect_mentions(&event.content, &known_pubkeys);
 
-                info!("#{} {} : {}", group, author_name, &preview[..preview.len().min(60)]);
+                // Phase 1: Check respond mode filtering
+                let respond_mode = state.config.get_group_respond_mode(&group);
+                let should_deliver_webhook = match respond_mode {
+                    RespondMode::All => true,
+                    RespondMode::None => false,
+                    RespondMode::Mentions => {
+                        // Check if our pubkey is mentioned
+                        let relay = state.relay.read().await;
+                        let our_pubkey = relay.our_pubkey().to_hex();
+                        drop(relay);
+                        mentions_pubkey(&detected_mentions, &our_pubkey)
+                    },
+                };
+
+                // Phase 1: Add to ring buffer for conversation context
+                let ring_entry = MessageEntry {
+                    author_pubkey: author_hex.clone(),
+                    author_display_name: author_name.clone(),
+                    content_preview: preview.clone(),
+                    timestamp: event.created_at.as_secs() as i64,
+                    event_id: event_id_hex.clone(),
+                };
+                state.ring_buffer.push(&group, ring_entry).await;
+
+                // Phase 1: Deliver webhook with enhanced data if appropriate
+                if should_deliver_webhook {
+                    let context = state.ring_buffer.get_context(&group, 15).await; // Last 15 messages
+                    let mentions = if detected_mentions.is_empty() {
+                        None
+                    } else {
+                        Some(detected_mentions)
+                    };
+
+                    state.webhook.deliver_group_message_enhanced(
+                        &event_id_hex, &group, &author_name, &preview, 
+                        event.created_at.as_secs() as i64,
+                        Some(context),
+                        mentions,
+                    ).await?;
+
+                    info!("#{} {} : {}", group, author_name, &preview[..preview.len().min(60)]);
+                } else {
+                    debug!("#{} {} : {} (filtered by respond_mode: {})", 
+                           group, author_name, &preview[..preview.len().min(60)], respond_mode);
+                }
             }
             RelayEvent::DirectMessage { event } => {
                 let event_id_hex = event.id.to_hex();
@@ -184,6 +235,7 @@ impl Bridge {
                     return Ok(());
                 }
 
+                // Store event in cache
                 state.cache.store_raw(
                     &event_id_hex,
                     &author_hex,
@@ -196,11 +248,24 @@ impl Bridge {
                 ).await?;
 
                 let author_name = state.profiles.get_display_name_hex(&author_hex).await;
-                let preview: String = event.content.chars().take(state.config.webhook.preview_length).collect();
 
-                state.webhook.deliver_dm_raw(
+                // Phase 1: Content sanitization
+                let preview = sanitize_content_preview(&event.content, state.config.webhook.preview_length);
+
+                // Phase 1: Mention detection
+                let known_pubkeys = state.profiles.get_known_pubkeys().await;
+                let detected_mentions = detect_mentions(&event.content, &known_pubkeys);
+                let mentions = if detected_mentions.is_empty() {
+                    None
+                } else {
+                    Some(detected_mentions)
+                };
+
+                // DMs are always delivered (no respond mode filtering)
+                state.webhook.deliver_dm_enhanced(
                     &event_id_hex, &author_name, &preview,
                     event.created_at.as_secs() as i64,
+                    mentions,
                 ).await?;
 
                 info!("DM from {}: {}", author_name, &preview[..preview.len().min(60)]);

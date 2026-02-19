@@ -270,4 +270,17 @@ impl ProfileCache {
         self.stats.write().await.stores += 1;
         Ok(())
     }
+
+    /// Get all known pubkey -> display_name mappings for mention detection
+    pub async fn get_known_pubkeys(&self) -> std::collections::HashMap<String, String> {
+        let cache = self.cache.read().await;
+        cache.iter()
+            .map(|(pubkey_hex, cached_profile)| {
+                let display_name = cached_profile.profile.display_name.clone()
+                    .or_else(|| cached_profile.profile.name.clone())
+                    .unwrap_or_else(|| format!("{}...", &pubkey_hex[..8]));
+                (pubkey_hex.clone(), display_name)
+            })
+            .collect()
+    }
 }
