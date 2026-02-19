@@ -1,0 +1,27 @@
+[relay]
+url = "wss://zooid.atlantislabs.space"
+
+[identity]
+nsec_file = "/home/k0/openclaw/.secrets/nostr.json"
+
+[groups]
+subscribe = ["inner-circle", "techteam"]
+
+[groups.respond_modes]
+inner-circle = "all"
+techteam = "all"
+
+[webhook]
+url = "http://127.0.0.1:18789/hooks/nostr?token=47c5714e092a666ca9f4cc49388d9165fdf260970d2f16bf"
+dm_url = "http://127.0.0.1:18789/hooks/nostr-dm?token=47c5714e092a666ca9f4cc49388d9165fdf260970d2f16bf"
+preview_length = 500
+
+[api]
+bind = "127.0.0.1:3847"
+
+[cache]
+db_path = "/home/k0/.local/share/nostr-bridge/bridge.db"
+retention_days = 30
+
+[logging]
+level = "info"
