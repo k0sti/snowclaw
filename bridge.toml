@@ -12,8 +12,9 @@ inner-circle = "all"
 techteam = "all"
 
 [webhook]
-url = "http://127.0.0.1:18789/hooks/nostr?token=47c5714e092a666ca9f4cc49388d9165fdf260970d2f16bf"
-dm_url = "http://127.0.0.1:18789/hooks/nostr-dm?token=47c5714e092a666ca9f4cc49388d9165fdf260970d2f16bf"
+url = "http://127.0.0.1:18789/hooks/nostr"
+dm_url = "http://127.0.0.1:18789/hooks/nostr-dm"
+token = "47c5714e092a666ca9f4cc49388d9165fdf260970d2f16bf"
 preview_length = 500
 
 [api]
