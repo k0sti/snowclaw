@@ -86,12 +86,11 @@ impl Bridge {
         self.state.webhook.test_webhook().await
             .with_context(|| "Webhook connectivity test failed")?;
 
-        // Start event stream — create notifications receiver and spawn immediately
+        // Start event stream
         let (event_tx, event_rx) = mpsc::channel(1000);
         {
             let relay = self.state.relay.read().await;
-            let notifications = relay.notifications();
-            relay.start_event_stream(event_tx, notifications);
+            relay.start_event_stream(event_tx);
         }
 
         // Start event processing task
