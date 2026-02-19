@@ -2033,7 +2033,17 @@ pub async fn start_channels(config: Config) -> Result<()> {
         Some(&config.identity),
         bootstrap_max_chars,
     );
-    system_prompt.push_str(&build_tool_instructions(tools_registry.as_ref()));
+    // Skip XML tool instructions when the default provider supports native tool calling.
+    // Native-tool providers (Anthropic, OpenAI) receive tool definitions via the API,
+    // so embedding XML tool schemas in the system prompt wastes tokens and confuses the model.
+    let default_provider = config.default_provider.as_deref().unwrap_or("openrouter");
+    let provider_supports_native_tools = matches!(
+        default_provider,
+        "anthropic" | "openai" | "openrouter"
+    );
+    if !provider_supports_native_tools {
+        system_prompt.push_str(&build_tool_instructions(tools_registry.as_ref()));
+    }
 
     if !skills.is_empty() {
         println!(
