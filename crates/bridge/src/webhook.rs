@@ -4,6 +4,8 @@ use anyhow::{Result, Context};
 use tokio::time::{sleep, Duration};
 use tracing::{info, warn, error, debug};
 use nostr_sdk::Event;
+use nostr_core::{MessageEntry, Mention, MentionType};
+use chrono::Utc;
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_RETRIES: u32 = 3;
@@ -27,6 +29,25 @@ pub struct WebhookPayload {
     pub preview: String,
     pub event_id: String,
     pub created_at: i64,
+    // Phase 1 enhancements: conversation context and mentions
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context: Option<Vec<ContextMessage>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mentions: Option<Vec<MentionInfo>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContextMessage {
+    pub author: String,
+    pub content_preview: String,
+    pub timestamp_relative: String, // e.g., "2m ago", "1h ago"
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MentionInfo {
+    pub mention_type: String, // "npub", "hex_pubkey", "nip05", "at_name"
+    pub raw_text: String,
+    pub resolved_name: Option<String>,
 }
 
 impl WebhookDeliverer {
@@ -63,6 +84,8 @@ impl WebhookDeliverer {
             preview: self.create_preview(&event.content),
             event_id: event.id.to_hex(),
             created_at: event.created_at.as_secs() as i64,
+            context: None,
+            mentions: None,
         };
 
         self.deliver_payload(&self.group_url, &payload).await
@@ -93,6 +116,8 @@ impl WebhookDeliverer {
             preview: self.create_preview(content_for_preview),
             event_id: event.id.to_hex(),
             created_at: event.created_at.as_secs() as i64,
+            context: None,
+            mentions: None,
         };
 
         self.deliver_payload(dm_url, &payload).await
@@ -107,6 +132,8 @@ impl WebhookDeliverer {
             preview: "Test webhook connectivity".to_string(),
             event_id: "test".to_string(),
             created_at: chrono::Utc::now().timestamp(),
+            context: None,
+            mentions: None,
         };
 
         info!("Testing group webhook: {}", self.group_url);
@@ -238,6 +265,8 @@ impl WebhookDeliverer {
             preview: preview.to_string(),
             event_id: event_id.to_string(),
             created_at,
+            context: None,
+            mentions: None,
         };
         self.deliver_payload(&self.group_url, &payload).await
     }
@@ -254,7 +283,117 @@ impl WebhookDeliverer {
             preview: preview.to_string(),
             event_id: event_id.to_string(),
             created_at,
+            context: None,
+            mentions: None,
         };
         self.deliver_payload(url, &payload).await
+    }
+
+    /// Deliver group message with enhanced context and mentions
+    pub async fn deliver_group_message_enhanced(
+        &self, 
+        event_id: &str, 
+        group: &str, 
+        author: &str, 
+        preview: &str, 
+        created_at: i64,
+        context: Option<Vec<MessageEntry>>,
+        mentions: Option<Vec<Mention>>,
+    ) -> Result<()> {
+        let webhook_context = context.map(|ctx| {
+            ctx.into_iter().map(|entry| {
+                ContextMessage {
+                    author: entry.author_display_name,
+                    content_preview: entry.content_preview,
+                    timestamp_relative: format_relative_time(entry.timestamp),
+                }
+            }).collect()
+        });
+
+        let webhook_mentions = mentions.map(|mentions| {
+            mentions.into_iter().map(|mention| {
+                MentionInfo {
+                    mention_type: match mention.mention_type {
+                        MentionType::Npub => "npub".to_string(),
+                        MentionType::HexPubkey => "hex_pubkey".to_string(),
+                        MentionType::Nip05 => "nip05".to_string(),
+                        MentionType::AtName => "at_name".to_string(),
+                    },
+                    raw_text: mention.raw_text,
+                    resolved_name: mention.resolved_name,
+                }
+            }).collect()
+        });
+
+        let payload = WebhookPayload {
+            r#type: "group_message".to_string(),
+            group: Some(group.to_string()),
+            author: author.to_string(),
+            preview: preview.to_string(),
+            event_id: event_id.to_string(),
+            created_at,
+            context: webhook_context,
+            mentions: webhook_mentions,
+        };
+
+        self.deliver_payload(&self.group_url, &payload).await
+    }
+
+    /// Deliver DM with enhanced context and mentions
+    pub async fn deliver_dm_enhanced(
+        &self,
+        event_id: &str,
+        author: &str,
+        preview: &str,
+        created_at: i64,
+        mentions: Option<Vec<Mention>>,
+    ) -> Result<()> {
+        let url = self.dm_url.as_deref().unwrap_or(&self.group_url);
+        
+        let webhook_mentions = mentions.map(|mentions| {
+            mentions.into_iter().map(|mention| {
+                MentionInfo {
+                    mention_type: match mention.mention_type {
+                        MentionType::Npub => "npub".to_string(),
+                        MentionType::HexPubkey => "hex_pubkey".to_string(),
+                        MentionType::Nip05 => "nip05".to_string(),
+                        MentionType::AtName => "at_name".to_string(),
+                    },
+                    raw_text: mention.raw_text,
+                    resolved_name: mention.resolved_name,
+                }
+            }).collect()
+        });
+
+        let payload = WebhookPayload {
+            r#type: "direct_message".to_string(),
+            group: None,
+            author: author.to_string(),
+            preview: preview.to_string(),
+            event_id: event_id.to_string(),
+            created_at,
+            context: None, // DMs don't have group context
+            mentions: webhook_mentions,
+        };
+
+        self.deliver_payload(url, &payload).await
+    }
+}
+
+/// Format a timestamp as relative time (e.g., "2m ago", "1h ago")
+fn format_relative_time(timestamp: i64) -> String {
+    let now = Utc::now().timestamp();
+    let diff = now - timestamp;
+    
+    if diff < 60 {
+        "now".to_string()
+    } else if diff < 3600 {
+        format!("{}m ago", diff / 60)
+    } else if diff < 86400 {
+        format!("{}h ago", diff / 3600)
+    } else if diff < 604800 {
+        format!("{}d ago", diff / 86400)
+    } else {
+        format!("{}w ago", diff / 604800)
     }
 }
