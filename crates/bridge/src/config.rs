@@ -32,6 +32,38 @@ pub struct IdentityConfig {
 pub struct GroupsConfig {
     #[serde(default)]
     pub subscribe: Vec<String>,
+    #[serde(default)]
+    pub respond_modes: std::collections::HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RespondMode {
+    All,
+    Mentions,
+    None,
+}
+
+impl std::str::FromStr for RespondMode {
+    type Err = String;
+    
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "all" => Ok(RespondMode::All),
+            "mentions" => Ok(RespondMode::Mentions),
+            "none" => Ok(RespondMode::None),
+            _ => Err(format!("Invalid respond mode: {}", s)),
+        }
+    }
+}
+
+impl std::fmt::Display for RespondMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RespondMode::All => write!(f, "all"),
+            RespondMode::Mentions => write!(f, "mentions"),
+            RespondMode::None => write!(f, "none"),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -183,5 +215,13 @@ impl Config {
         self.cache.db_path = shellexpand::tilde(&self.cache.db_path).to_string();
         
         Ok(())
+    }
+
+    /// Get the respond mode for a specific group (defaults to "all" if not specified)
+    pub fn get_group_respond_mode(&self, group: &str) -> RespondMode {
+        self.groups.respond_modes
+            .get(group)
+            .and_then(|mode_str| mode_str.parse().ok())
+            .unwrap_or(RespondMode::All) // Default to "all" for backward compatibility
     }
 }
