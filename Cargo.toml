@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/robot-kit"]
+members = [".", "crates/robot-kit", "crates/nostr-core"]
 resolver = "2"
 
 [package]
@@ -102,6 +102,13 @@ console = "0.16"
 
 # Hardware discovery (device path globbing)
 glob = "0.3"
+
+# LRU cache
+lru = "0.12"
+
+# Nostr protocol
+nostr-sdk = { version = "0.44", features = ["nip04", "nip44", "nip59"] }
+nostr-core = { path = "crates/nostr-core" }
 
 # WebSocket client channels (Discord/Lark/DingTalk)
 tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
