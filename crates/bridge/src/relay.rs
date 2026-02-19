@@ -7,7 +7,7 @@ use anyhow::{Result, Context};
 use std::collections::HashSet;
 use std::str::FromStr;
 use tokio::sync::mpsc;
-use tracing::{info, debug, warn, error};
+use tracing::{info, debug, warn, error, trace};
 
 pub struct RelayClient {
     client: Client,
@@ -34,6 +34,11 @@ impl RelayClient {
             our_pubkey,
             subscribed_groups: HashSet::new(),
         })
+    }
+
+    /// Get a notifications receiver — call BEFORE subscribe to catch backfill
+    pub fn notifications(&self) -> tokio::sync::broadcast::Receiver<RelayPoolNotification> {
+        self.client.notifications()
     }
 
     pub async fn connect(&mut self) -> Result<()> {
@@ -94,69 +99,74 @@ impl RelayClient {
         Ok(())
     }
 
-    pub fn start_event_stream(&self, tx: mpsc::Sender<RelayEvent>) {
-        let client = self.client.clone();
+    pub fn start_event_stream(&self, tx: mpsc::Sender<RelayEvent>, mut notifications: tokio::sync::broadcast::Receiver<RelayPoolNotification>) {
         let our_pubkey = self.our_pubkey;
 
         tokio::spawn(async move {
-            info!("Event stream listening...");
-            let tx = tx;
-            let result = client.handle_notifications(|notification| {
-                let tx = tx.clone();
-                async move {
-                    match notification {
-                        RelayPoolNotification::Event { event, .. } => {
-                            if event.pubkey == our_pubkey {
-                                return Ok(false);
-                            }
+            info!("Event stream listening with pre-created receiver...");
 
-                            let kind_num = event.kind.as_u16();
-                            let relay_event = match kind_num {
-                                9 => {
-                                    let group = event.tags.iter()
-                                        .find(|t| t.kind() == TagKind::h())
-                                        .and_then(|t| t.content())
-                                        .map(|s| s.to_string())
-                                        .unwrap_or_else(|| "unknown".to_string());
-                                    
-                                    debug!("Group msg #{} from {}", group, &event.pubkey.to_hex()[..8]);
-                                    Some(RelayEvent::GroupMessage { 
-                                        event: event.as_ref().clone(), group 
-                                    })
+            loop {
+                match notifications.recv().await {
+                    Ok(notification) => {
+                        match notification {
+                            RelayPoolNotification::Event { event, .. } => {
+                                if event.pubkey == our_pubkey {
+                                    continue;
                                 }
-                                4 => {
-                                    debug!("DM from {}", &event.pubkey.to_hex()[..8]);
-                                    Some(RelayEvent::DirectMessage { 
-                                        event: event.as_ref().clone() 
-                                    })
-                                }
-                                0 => {
-                                    debug!("Profile from {}", &event.pubkey.to_hex()[..8]);
-                                    Some(RelayEvent::ProfileUpdate { 
-                                        event: event.as_ref().clone() 
-                                    })
-                                }
-                                _ => None,
-                            };
 
-                            if let Some(re) = relay_event {
-                                if tx.send(re).await.is_err() {
-                                    warn!("Event receiver dropped");
-                                    return Ok(true); // exit
+                                let kind_num = event.kind.as_u16();
+                                let relay_event = match kind_num {
+                                    9 => {
+                                        let group = event.tags.iter()
+                                            .find(|t| t.kind() == TagKind::h())
+                                            .and_then(|t| t.content())
+                                            .map(|s| s.to_string())
+                                            .unwrap_or_else(|| "unknown".to_string());
+                                        
+                                        info!("Event received: group msg #{} from {}", group, &event.pubkey.to_hex()[..8]);
+                                        Some(RelayEvent::GroupMessage { 
+                                            event: event.as_ref().clone(), group 
+                                        })
+                                    }
+                                    4 => {
+                                        info!("Event received: DM from {}", &event.pubkey.to_hex()[..8]);
+                                        Some(RelayEvent::DirectMessage { 
+                                            event: event.as_ref().clone() 
+                                        })
+                                    }
+                                    0 => {
+                                        debug!("Event received: profile from {}", &event.pubkey.to_hex()[..8]);
+                                        Some(RelayEvent::ProfileUpdate { 
+                                            event: event.as_ref().clone() 
+                                        })
+                                    }
+                                    _ => {
+                                        debug!("Event received: kind {} from {}", kind_num, &event.pubkey.to_hex()[..8]);
+                                        None
+                                    }
+                                };
+
+                                if let Some(re) = relay_event {
+                                    if tx.send(re).await.is_err() {
+                                        warn!("Event receiver dropped, exiting stream");
+                                        return;
+                                    }
                                 }
                             }
+                            RelayPoolNotification::Message { message, .. } => {
+                                // Log relay protocol messages at debug
+                                trace!("Relay protocol msg: {:?}", message);
+                            }
+                            _ => {}
                         }
-                        RelayPoolNotification::Message { message, .. } => {
-                            debug!("Relay msg: {:?}", message);
-                        }
-                        _ => {}
                     }
-                    Ok(false) // continue
+                    Err(e) => {
+                        warn!("Notification recv error (lagged?): {}", e);
+                        // tokio broadcast::Receiver can return Lagged error
+                        // if we fall behind — just continue
+                        continue;
+                    }
                 }
-            }).await;
-
-            if let Err(e) = result {
-                error!("handle_notifications ended with error: {}", e);
             }
         });
     }
