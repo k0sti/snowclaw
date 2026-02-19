@@ -1313,7 +1313,8 @@ impl Channel for NostrChannel {
                                     content,
                                     channel: format!("nostr:#{}", group),
                                     timestamp: event.created_at.as_secs(),
-                                    metadata: Self::build_metadata(&event, Some(&group), is_owner),
+                                    thread_ts: None,
+                                    
                                 };
 
                                 if tx.send(msg).await.is_err() {
@@ -1367,7 +1368,8 @@ impl Channel for NostrChannel {
                                     content,
                                     channel: "nostr:tasks".to_string(),
                                     timestamp: event.created_at.as_secs(),
-                                    metadata: Self::build_metadata(&event, None, false),
+                                    thread_ts: None,
+                                    
                                 };
 
                                 if tx.send(msg).await.is_err() {

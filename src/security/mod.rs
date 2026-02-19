@@ -1,6 +1,7 @@
 pub mod audit;
 #[cfg(feature = "sandbox-bubblewrap")]
 pub mod bubblewrap;
+pub mod key_filter;
 pub mod detect;
 pub mod docker;
 #[cfg(target_os = "linux")]

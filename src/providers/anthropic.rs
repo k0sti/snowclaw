@@ -497,6 +497,53 @@ impl Provider for AnthropicProvider {
         true
     }
 
+    async fn chat_with_tools(
+        &self,
+        messages: &[ChatMessage],
+        tools: &[serde_json::Value],
+        model: &str,
+        temperature: f64,
+    ) -> anyhow::Result<ProviderChatResponse> {
+        // Convert OpenAI-format tool JSON to ToolSpec so we can reuse the
+        // existing `chat()` method which handles full message history,
+        // system prompt extraction, caching, and Anthropic native formatting.
+        let tool_specs: Vec<ToolSpec> = tools
+            .iter()
+            .filter_map(|t| {
+                let func = t.get("function").or_else(|| {
+                    tracing::warn!("Skipping malformed tool definition (missing 'function' key)");
+                    None
+                })?;
+                let name = func.get("name").and_then(|n| n.as_str()).or_else(|| {
+                    tracing::warn!("Skipping tool with missing or non-string 'name'");
+                    None
+                })?;
+                Some(ToolSpec {
+                    name: name.to_string(),
+                    description: func
+                        .get("description")
+                        .and_then(|d| d.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    parameters: func
+                        .get("parameters")
+                        .cloned()
+                        .unwrap_or(serde_json::json!({"type": "object"})),
+                })
+            })
+            .collect();
+
+        let request = ProviderChatRequest {
+            messages,
+            tools: if tool_specs.is_empty() {
+                None
+            } else {
+                Some(&tool_specs)
+            },
+        };
+        self.chat(request, model, temperature).await
+    }
+
     async fn warmup(&self) -> anyhow::Result<()> {
         if let Some(credential) = self.credential.as_ref() {
             let mut request = self

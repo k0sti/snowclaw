@@ -2066,6 +2066,7 @@ pub struct ChannelsConfig {
     pub lark: Option<LarkConfig>,
     pub dingtalk: Option<DingTalkConfig>,
     pub qq: Option<QQConfig>,
+    pub nostr: Option<NostrConfig>,
     /// Timeout in seconds for processing a single channel message (LLM + tools).
     /// Default: 300s for on-device LLMs (Ollama) which are slower than cloud APIs.
     #[serde(default = "default_channel_message_timeout_secs")]
@@ -2095,6 +2096,7 @@ impl Default for ChannelsConfig {
             lark: None,
             dingtalk: None,
             qq: None,
+            nostr: None,
             message_timeout_secs: default_channel_message_timeout_secs(),
         }
     }
@@ -2547,7 +2549,7 @@ pub struct QQConfig {
 }
 
 /// Nostr channel configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct NostrConfig {
     /// Relay URLs (e.g. ["wss://zooid.atlantislabs.space"])
     pub relays: Vec<String>,

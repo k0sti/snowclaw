@@ -15,6 +15,9 @@ pub mod slack;
 pub mod telegram;
 pub mod traits;
 pub mod whatsapp;
+
+pub mod nostr;
+pub mod nostr_memory;
 #[cfg(feature = "whatsapp-web")]
 pub mod whatsapp_storage;
 #[cfg(feature = "whatsapp-web")]
