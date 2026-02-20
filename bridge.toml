@@ -2,7 +2,7 @@
 url = "wss://zooid.atlantislabs.space"
 
 [identity]
-nsec_file = "/home/k0/openclaw/.secrets/nostr.json"
+nsec_file = "/home/k0/.snowclaw/secrets/nostr.json"
 
 [groups]
 subscribe = ["inner-circle", "techteam"]
