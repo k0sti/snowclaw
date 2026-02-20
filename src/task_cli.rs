@@ -320,30 +320,3 @@ pub fn handle_command(cmd: TaskCommands, config: &Config) -> Result<()> {
     }
 }
 
-/// Create a task programmatically (used by channel message handler).
-/// Returns the task ID (e.g. "SNOW-3").
-pub fn create_task(config: &Config, title: &str, description: &str) -> Result<String> {
-    let mut tasks = load_tasks(config)?;
-    let number = next_task_number(&tasks);
-    let task_id = format!("SNOW-{number}");
-    let now = chrono::Utc::now().to_rfc3339();
-
-    let task = serde_json::json!({
-        "id": task_id,
-        "title": title,
-        "description": description,
-        "status": "draft",
-        "created_at": now,
-        "updated_at": now,
-        "kind": 1621,
-        "status_history": [{
-            "status": "draft",
-            "kind": 1633,
-            "timestamp": now,
-        }]
-    });
-
-    tasks.push(task);
-    save_tasks(config, &tasks)?;
-    Ok(task_id)
-}

@@ -241,6 +241,99 @@ fn interruption_scope_key(msg: &traits::ChannelMessage) -> String {
     format!("{}_{}_{}", msg.channel, msg.reply_target, msg.sender)
 }
 
+/// Extract task description from a "create task: <description>" message.
+/// Case-insensitive prefix match. Returns None if the message doesn't match.
+fn extract_task_creation(content: &str) -> Option<String> {
+    let trimmed = content.trim();
+    let lower = trimmed.to_lowercase();
+    if let Some(rest) = lower.strip_prefix("create task:") {
+        let desc = rest.trim();
+        if !desc.is_empty() {
+            // Use the original casing from the message
+            let offset = trimmed.len() - trimmed.to_lowercase().len() + "create task:".len();
+            let _ = offset; // unused, we just use index math
+            let original_rest = &trimmed["create task:".len()..];
+            return Some(original_rest.trim().to_string());
+        }
+    }
+    None
+}
+
+/// Create a task in the local JSON store. Returns the SNOW-N task ID.
+fn create_task_in_workspace(workspace_dir: &std::path::Path, title: &str) -> anyhow::Result<String> {
+    let path = workspace_dir.join("nostr_tasks.json");
+    let mut tasks: Vec<serde_json::Value> = if path.exists() {
+        serde_json::from_str(&std::fs::read_to_string(&path)?)?
+    } else {
+        Vec::new()
+    };
+
+    let max_num = tasks
+        .iter()
+        .filter_map(|t| t.get("id").and_then(|v| v.as_str()))
+        .filter_map(|id| id.strip_prefix("SNOW-"))
+        .filter_map(|n| n.parse::<u64>().ok())
+        .max()
+        .unwrap_or(0);
+    let number = max_num + 1;
+    let task_id = format!("SNOW-{number}");
+    let now = chrono::Utc::now().to_rfc3339();
+
+    tasks.push(serde_json::json!({
+        "id": task_id,
+        "title": title,
+        "description": "",
+        "status": "draft",
+        "created_at": now,
+        "updated_at": now,
+        "kind": 1621,
+        "status_history": [{"status": "draft", "kind": 1633, "timestamp": now}]
+    }));
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&path, serde_json::to_string_pretty(&tasks)?)?;
+    Ok(task_id)
+}
+
+/// Handle task creation triggered by a group message.
+async fn handle_task_creation_from_message(
+    ctx: &ChannelRuntimeContext,
+    msg: &traits::ChannelMessage,
+    task_desc: &str,
+    target_channel: Option<&Arc<dyn Channel>>,
+) {
+    match create_task_in_workspace(&ctx.workspace_dir, task_desc) {
+        Ok(task_id) => {
+            let reply = format!("Created {task_id}: {task_desc}");
+            tracing::info!("Task created from message: {task_id}");
+            if let Some(channel) = target_channel {
+                let _ = channel
+                    .send(
+                        &SendMessage::new(reply, &msg.reply_target)
+                            .in_thread(msg.thread_ts.clone()),
+                    )
+                    .await;
+            }
+        }
+        Err(e) => {
+            tracing::warn!("Failed to create task from message: {e}");
+            if let Some(channel) = target_channel {
+                let _ = channel
+                    .send(
+                        &SendMessage::new(
+                            format!("Failed to create task: {e}"),
+                            &msg.reply_target,
+                        )
+                        .in_thread(msg.thread_ts.clone()),
+                    )
+                    .await;
+            }
+        }
+    }
+}
+
 fn channel_delivery_instructions(channel_name: &str) -> Option<&'static str> {
     match channel_name {
         "telegram" => Some(
@@ -1078,6 +1171,12 @@ async fn process_channel_message(
         tracing::warn!("Failed to apply runtime config update: {err}");
     }
     if handle_runtime_command_if_needed(ctx.as_ref(), &msg, target_channel.as_ref()).await {
+        return;
+    }
+
+    // Task creation from group messages: "create task: <description>"
+    if let Some(task_desc) = extract_task_creation(&msg.content) {
+        handle_task_creation_from_message(&ctx, &msg, &task_desc, target_channel.as_ref()).await;
         return;
     }
 
