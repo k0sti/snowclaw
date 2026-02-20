@@ -1529,6 +1529,14 @@ pub struct MemoryConfig {
     #[serde(default = "default_true")]
     pub auto_hydrate: bool,
 
+    // ── Nostr backend options ─────────────────────────────────
+    /// Relay URL for NIP-78 memory storage (e.g. "wss://relay.example.com")
+    #[serde(default)]
+    pub nostr_relay: Option<String>,
+    /// Optional local relay URL for private agent data (e.g. "ws://localhost:7777")
+    #[serde(default)]
+    pub local_relay: Option<String>,
+
     // ── SQLite backend options ─────────────────────────────────
     /// For sqlite backend: max seconds to wait when opening the DB (e.g. file locked).
     /// None = wait indefinitely (default). Recommended max: 300.
@@ -1602,6 +1610,8 @@ impl Default for MemoryConfig {
             snapshot_enabled: false,
             snapshot_on_hygiene: false,
             auto_hydrate: true,
+            nostr_relay: None,
+            local_relay: None,
             sqlite_open_timeout_secs: None,
         }
     }

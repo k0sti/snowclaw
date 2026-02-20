@@ -53,7 +53,7 @@ where
         }
         MemoryBackendKind::Postgres => Ok(Box::new(postgres_builder()?)),
         MemoryBackendKind::Markdown => Ok(Box::new(MarkdownMemory::new(workspace_dir))),
-        MemoryBackendKind::Nostr => Ok(Box::new(NostrMemory::new(workspace_dir))),
+        MemoryBackendKind::Nostr => Ok(Box::new(NostrMemory::local_only(workspace_dir))),
         MemoryBackendKind::None => Ok(Box::new(NoneMemory::new())),
         MemoryBackendKind::Unknown => {
             tracing::warn!(
@@ -282,6 +282,17 @@ pub fn create_memory_with_storage_and_routes(
             &storage_provider.table,
             storage_provider.connect_timeout_secs,
         )
+    }
+
+    // Nostr backend: construct with relay config if available.
+    if matches!(backend_kind, MemoryBackendKind::Nostr) {
+        let nsec = std::env::var("SNOWCLAW_NSEC").ok();
+        return Ok(Box::new(NostrMemory::new(
+            config.nostr_relay.as_deref(),
+            config.local_relay.as_deref(),
+            nsec.as_deref(),
+            workspace_dir,
+        )));
     }
 
     create_memory_with_builders(
