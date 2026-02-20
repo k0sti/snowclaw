@@ -76,6 +76,7 @@ mod security;
 mod service;
 mod skillforge;
 mod skills;
+mod task_cli;
 mod tools;
 mod tunnel;
 mod util;
@@ -300,6 +301,24 @@ Examples:
     Skills {
         #[command(subcommand)]
         skill_command: SkillCommands,
+    },
+
+    /// Manage Nostr-native tasks (create, list, status, update)
+    #[command(long_about = "\
+Manage Nostr-native tasks.
+
+Create, list, inspect, and update tasks using Nostr event kinds \
+(1621 for tasks, 1630-1637 for status transitions).
+
+Examples:
+  snowclaw task create 'Deploy v2'
+  snowclaw task list
+  snowclaw task list --status executing
+  snowclaw task status task-1234567890
+  snowclaw task update task-1234567890 --status done")]
+    Task {
+        #[command(subcommand)]
+        task_command: task_cli::TaskCommands,
     },
 
     /// Migrate data from other agent runtimes
@@ -887,6 +906,8 @@ async fn main() -> Result<()> {
         Commands::Skills { skill_command } => {
             skills::handle_command(skill_command, &config.workspace_dir)
         }
+
+        Commands::Task { task_command } => task_cli::handle_command(task_command, &config),
 
         Commands::Migrate { migrate_command } => {
             migration::handle_command(migrate_command, &config).await
