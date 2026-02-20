@@ -4,6 +4,12 @@ This page defines the fastest supported path to install and initialize ZeroClaw.
 
 Last verified: **February 18, 2026**.
 
+## Option 0: Homebrew (macOS/Linuxbrew)
+
+```bash
+brew install zeroclaw
+```
+
 ## Option A (Recommended): Clone + local script
 
 ```bash
@@ -51,6 +57,15 @@ This legacy endpoint prefers forwarding to `scripts/bootstrap.sh` and falls back
 If you run Option B outside a repository checkout, the bootstrap script automatically clones a temporary workspace, builds, installs, and then cleans it up.
 
 ## Optional onboarding modes
+
+### Containerized onboarding (Docker)
+
+```bash
+./bootstrap.sh --docker
+```
+
+This builds a local ZeroClaw image and launches onboarding inside a container while
+persisting config/workspace to `./.zeroclaw-docker`.
 
 ### Quick onboarding (non-interactive)
 

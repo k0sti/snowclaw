@@ -1,3 +1,19 @@
+//! Channel subsystem for messaging platform integrations.
+//!
+//! This module provides the multi-channel messaging infrastructure that connects
+//! ZeroClaw to external platforms. Each channel implements the [`Channel`] trait
+//! defined in [`traits`], which provides a uniform interface for sending messages,
+//! listening for incoming messages, health checking, and typing indicators.
+//!
+//! Channels are instantiated by [`start_channels`] based on the runtime configuration.
+//! The subsystem manages per-sender conversation history, concurrent message processing
+//! with configurable parallelism, and exponential-backoff reconnection for resilience.
+//!
+//! # Extension
+//!
+//! To add a new channel, implement [`Channel`] in a new submodule and wire it into
+//! [`start_channels`]. See `AGENTS.md` §7.2 for the full change playbook.
+
 pub mod cli;
 pub mod dingtalk;
 pub mod discord;
@@ -60,14 +76,18 @@ use std::fmt::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant, SystemTime};
 use tokio_util::sync::CancellationToken;
 
 /// Per-sender conversation history for channel messages.
 type ConversationHistoryMap = Arc<Mutex<HashMap<String, Vec<ChatMessage>>>>;
 /// Maximum history messages to keep per sender.
 const MAX_CHANNEL_HISTORY: usize = 50;
+/// Minimum user-message length (in chars) for auto-save to memory.
+/// Messages shorter than this (e.g. "ok", "thanks") are not stored,
+/// reducing noise in memory recall.
+const AUTOSAVE_MIN_MESSAGE_CHARS: usize = 20;
 
 /// Maximum characters per injected workspace file (matches `OpenClaw` default).
 const BOOTSTRAP_MAX_CHARS: usize = 20_000;
@@ -120,6 +140,33 @@ struct ModelCacheState {
 struct ModelCacheEntry {
     provider: String,
     models: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct ChannelRuntimeDefaults {
+    default_provider: String,
+    model: String,
+    temperature: f64,
+    api_key: Option<String>,
+    api_url: Option<String>,
+    reliability: crate::config::ReliabilityConfig,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ConfigFileStamp {
+    modified: SystemTime,
+    len: u64,
+}
+
+#[derive(Debug, Clone)]
+struct RuntimeConfigState {
+    defaults: ChannelRuntimeDefaults,
+    last_applied_stamp: Option<ConfigFileStamp>,
+}
+
+fn runtime_config_store() -> &'static Mutex<HashMap<PathBuf, RuntimeConfigState>> {
+    static STORE: OnceLock<Mutex<HashMap<PathBuf, RuntimeConfigState>>> = OnceLock::new();
+    STORE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 #[derive(Clone)]
@@ -301,10 +348,176 @@ fn resolve_provider_alias(name: &str) -> Option<String> {
     None
 }
 
-fn default_route_selection(ctx: &ChannelRuntimeContext) -> ChannelRouteSelection {
-    ChannelRouteSelection {
-        provider: ctx.default_provider.as_str().to_string(),
+fn resolved_default_provider(config: &Config) -> String {
+    config
+        .default_provider
+        .clone()
+        .unwrap_or_else(|| "openrouter".to_string())
+}
+
+fn resolved_default_model(config: &Config) -> String {
+    config
+        .default_model
+        .clone()
+        .unwrap_or_else(|| "anthropic/claude-sonnet-4.6".to_string())
+}
+
+fn runtime_defaults_from_config(config: &Config) -> ChannelRuntimeDefaults {
+    ChannelRuntimeDefaults {
+        default_provider: resolved_default_provider(config),
+        model: resolved_default_model(config),
+        temperature: config.default_temperature,
+        api_key: config.api_key.clone(),
+        api_url: config.api_url.clone(),
+        reliability: config.reliability.clone(),
+    }
+}
+
+fn runtime_config_path(ctx: &ChannelRuntimeContext) -> Option<PathBuf> {
+    ctx.provider_runtime_options
+        .zeroclaw_dir
+        .as_ref()
+        .map(|dir| dir.join("config.toml"))
+}
+
+fn runtime_defaults_snapshot(ctx: &ChannelRuntimeContext) -> ChannelRuntimeDefaults {
+    if let Some(config_path) = runtime_config_path(ctx) {
+        let store = runtime_config_store()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some(state) = store.get(&config_path) {
+            return state.defaults.clone();
+        }
+    }
+
+    ChannelRuntimeDefaults {
+        default_provider: ctx.default_provider.as_str().to_string(),
         model: ctx.model.as_str().to_string(),
+        temperature: ctx.temperature,
+        api_key: ctx.api_key.clone(),
+        api_url: ctx.api_url.clone(),
+        reliability: (*ctx.reliability).clone(),
+    }
+}
+
+async fn config_file_stamp(path: &Path) -> Option<ConfigFileStamp> {
+    let metadata = tokio::fs::metadata(path).await.ok()?;
+    let modified = metadata.modified().ok()?;
+    Some(ConfigFileStamp {
+        modified,
+        len: metadata.len(),
+    })
+}
+
+fn decrypt_optional_secret_for_runtime_reload(
+    store: &crate::security::SecretStore,
+    value: &mut Option<String>,
+    field_name: &str,
+) -> Result<()> {
+    if let Some(raw) = value.clone() {
+        if crate::security::SecretStore::is_encrypted(&raw) {
+            *value = Some(
+                store
+                    .decrypt(&raw)
+                    .with_context(|| format!("Failed to decrypt {field_name}"))?,
+            );
+        }
+    }
+    Ok(())
+}
+
+async fn load_runtime_defaults_from_config_file(path: &Path) -> Result<ChannelRuntimeDefaults> {
+    let contents = tokio::fs::read_to_string(path)
+        .await
+        .with_context(|| format!("Failed to read {}", path.display()))?;
+    let mut parsed: Config =
+        toml::from_str(&contents).with_context(|| format!("Failed to parse {}", path.display()))?;
+    parsed.config_path = path.to_path_buf();
+
+    if let Some(zeroclaw_dir) = path.parent() {
+        let store = crate::security::SecretStore::new(zeroclaw_dir, parsed.secrets.encrypt);
+        decrypt_optional_secret_for_runtime_reload(&store, &mut parsed.api_key, "config.api_key")?;
+    }
+
+    parsed.apply_env_overrides();
+    Ok(runtime_defaults_from_config(&parsed))
+}
+
+async fn maybe_apply_runtime_config_update(ctx: &ChannelRuntimeContext) -> Result<()> {
+    let Some(config_path) = runtime_config_path(ctx) else {
+        return Ok(());
+    };
+
+    let Some(stamp) = config_file_stamp(&config_path).await else {
+        return Ok(());
+    };
+
+    {
+        let store = runtime_config_store()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some(state) = store.get(&config_path) {
+            if state.last_applied_stamp == Some(stamp) {
+                return Ok(());
+            }
+        }
+    }
+
+    let next_defaults = load_runtime_defaults_from_config_file(&config_path).await?;
+    let next_default_provider = providers::create_resilient_provider_with_options(
+        &next_defaults.default_provider,
+        next_defaults.api_key.as_deref(),
+        next_defaults.api_url.as_deref(),
+        &next_defaults.reliability,
+        &ctx.provider_runtime_options,
+    )?;
+    let next_default_provider: Arc<dyn Provider> = Arc::from(next_default_provider);
+
+    if let Err(err) = next_default_provider.warmup().await {
+        tracing::warn!(
+            provider = %next_defaults.default_provider,
+            "Provider warmup failed after config reload: {err}"
+        );
+    }
+
+    {
+        let mut cache = ctx.provider_cache.lock().unwrap_or_else(|e| e.into_inner());
+        cache.clear();
+        cache.insert(
+            next_defaults.default_provider.clone(),
+            Arc::clone(&next_default_provider),
+        );
+    }
+
+    {
+        let mut store = runtime_config_store()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        store.insert(
+            config_path.clone(),
+            RuntimeConfigState {
+                defaults: next_defaults.clone(),
+                last_applied_stamp: Some(stamp),
+            },
+        );
+    }
+
+    tracing::info!(
+        path = %config_path.display(),
+        provider = %next_defaults.default_provider,
+        model = %next_defaults.model,
+        temperature = next_defaults.temperature,
+        "Applied updated channel runtime config from disk"
+    );
+
+    Ok(())
+}
+
+fn default_route_selection(ctx: &ChannelRuntimeContext) -> ChannelRouteSelection {
+    let defaults = runtime_defaults_snapshot(ctx);
+    ChannelRouteSelection {
+        provider: defaults.default_provider,
+        model: defaults.model,
     }
 }
 
@@ -439,10 +652,6 @@ async fn get_or_create_provider(
     ctx: &ChannelRuntimeContext,
     provider_name: &str,
 ) -> anyhow::Result<Arc<dyn Provider>> {
-    if provider_name == ctx.default_provider.as_str() {
-        return Ok(Arc::clone(&ctx.provider));
-    }
-
     if let Some(existing) = ctx
         .provider_cache
         .lock()
@@ -453,17 +662,22 @@ async fn get_or_create_provider(
         return Ok(existing);
     }
 
-    let api_url = if provider_name == ctx.default_provider.as_str() {
-        ctx.api_url.as_deref()
+    if provider_name == ctx.default_provider.as_str() {
+        return Ok(Arc::clone(&ctx.provider));
+    }
+
+    let defaults = runtime_defaults_snapshot(ctx);
+    let api_url = if provider_name == defaults.default_provider.as_str() {
+        defaults.api_url.as_deref()
     } else {
         None
     };
 
     let provider = providers::create_resilient_provider_with_options(
         provider_name,
-        ctx.api_key.as_deref(),
+        defaults.api_key.as_deref(),
         api_url,
-        &ctx.reliability,
+        &defaults.reliability,
         &ctx.provider_runtime_options,
     )?;
     let provider: Arc<dyn Provider> = Arc::from(provider);
@@ -664,6 +878,100 @@ async fn build_memory_context(
     context
 }
 
+/// Extract a compact summary of tool interactions from history messages added
+/// during `run_tool_call_loop`. Scans assistant messages for `<tool_call>` tags
+/// or native tool-call JSON to collect tool names used.
+/// Returns an empty string when no tools were invoked.
+fn extract_tool_context_summary(history: &[ChatMessage], start_index: usize) -> String {
+    fn push_unique_tool_name(tool_names: &mut Vec<String>, name: &str) {
+        let candidate = name.trim();
+        if candidate.is_empty() {
+            return;
+        }
+        if !tool_names.iter().any(|existing| existing == candidate) {
+            tool_names.push(candidate.to_string());
+        }
+    }
+
+    fn collect_tool_names_from_tool_call_tags(content: &str, tool_names: &mut Vec<String>) {
+        const TAG_PAIRS: [(&str, &str); 4] = [
+            ("<tool_call>", "</tool_call>"),
+            ("<toolcall>", "</toolcall>"),
+            ("<tool-call>", "</tool-call>"),
+            ("<invoke>", "</invoke>"),
+        ];
+
+        for (open_tag, close_tag) in TAG_PAIRS {
+            for segment in content.split(open_tag) {
+                if let Some(json_end) = segment.find(close_tag) {
+                    let json_str = segment[..json_end].trim();
+                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(json_str) {
+                        if let Some(name) = val.get("name").and_then(|n| n.as_str()) {
+                            push_unique_tool_name(tool_names, name);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn collect_tool_names_from_native_json(content: &str, tool_names: &mut Vec<String>) {
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(content) {
+            if let Some(calls) = val.get("tool_calls").and_then(|c| c.as_array()) {
+                for call in calls {
+                    let name = call
+                        .get("function")
+                        .and_then(|f| f.get("name"))
+                        .and_then(|n| n.as_str())
+                        .or_else(|| call.get("name").and_then(|n| n.as_str()));
+                    if let Some(name) = name {
+                        push_unique_tool_name(tool_names, name);
+                    }
+                }
+            }
+        }
+    }
+
+    fn collect_tool_names_from_tool_results(content: &str, tool_names: &mut Vec<String>) {
+        let marker = "<tool_result name=\"";
+        let mut remaining = content;
+        while let Some(start) = remaining.find(marker) {
+            let name_start = start + marker.len();
+            let after_name_start = &remaining[name_start..];
+            if let Some(name_end) = after_name_start.find('"') {
+                let name = &after_name_start[..name_end];
+                push_unique_tool_name(tool_names, name);
+                remaining = &after_name_start[name_end + 1..];
+            } else {
+                break;
+            }
+        }
+    }
+
+    let mut tool_names: Vec<String> = Vec::new();
+
+    for msg in history.iter().skip(start_index) {
+        match msg.role.as_str() {
+            "assistant" => {
+                collect_tool_names_from_tool_call_tags(&msg.content, &mut tool_names);
+                collect_tool_names_from_native_json(&msg.content, &mut tool_names);
+            }
+            "user" => {
+                // Prompt-mode tool calls are always followed by [Tool results] entries
+                // containing `<tool_result name="...">` tags with canonical tool names.
+                collect_tool_names_from_tool_results(&msg.content, &mut tool_names);
+            }
+            _ => {}
+        }
+    }
+
+    if tool_names.is_empty() {
+        return String::new();
+    }
+
+    format!("[Used tools: {}]", tool_names.join(", "))
+}
+
 fn spawn_supervised_listener(
     ch: Arc<dyn Channel>,
     tx: tokio::sync::mpsc::Sender<traits::ChannelMessage>,
@@ -766,12 +1074,16 @@ async fn process_channel_message(
     );
 
     let target_channel = ctx.channels_by_name.get(&msg.channel).cloned();
+    if let Err(err) = maybe_apply_runtime_config_update(ctx.as_ref()).await {
+        tracing::warn!("Failed to apply runtime config update: {err}");
+    }
     if handle_runtime_command_if_needed(ctx.as_ref(), &msg, target_channel.as_ref()).await {
         return;
     }
 
     let history_key = conversation_history_key(&msg);
     let route = get_route_selection(ctx.as_ref(), &history_key);
+    let runtime_defaults = runtime_defaults_snapshot(ctx.as_ref());
     let active_provider = match get_or_create_provider(ctx.as_ref(), &route.provider).await {
         Ok(provider) => provider,
         Err(err) => {
@@ -795,7 +1107,7 @@ async fn process_channel_message(
     let memory_context =
         build_memory_context(ctx.memory.as_ref(), &msg.content, ctx.min_relevance_score).await;
 
-    if ctx.auto_save_memory {
+    if ctx.auto_save_memory && msg.content.chars().count() >= AUTOSAVE_MIN_MESSAGE_CHARS {
         let autosave_key = conversation_memory_key(&msg);
         let _ = ctx
             .memory
@@ -818,11 +1130,7 @@ async fn process_channel_message(
     let started_at = Instant::now();
 
     // Preserve user turn before the LLM call so interrupted requests keep context.
-    append_sender_turn(
-        ctx.as_ref(),
-        &history_key,
-        ChatMessage::user(&enriched_message),
-    );
+    append_sender_turn(ctx.as_ref(), &history_key, ChatMessage::user(&msg.content));
 
     // Build history from per-sender conversation cache.
     let prior_turns_raw = ctx
@@ -832,7 +1140,14 @@ async fn process_channel_message(
         .get(&history_key)
         .cloned()
         .unwrap_or_default();
-    let prior_turns = normalize_cached_channel_turns(prior_turns_raw);
+    let mut prior_turns = normalize_cached_channel_turns(prior_turns_raw);
+    // Keep persisted history clean (raw user text), but inject memory context
+    // for the current provider call by enriching the newest user turn only.
+    if let Some(last_turn) = prior_turns.last_mut() {
+        if last_turn.role == "user" {
+            last_turn.content = enriched_message.clone();
+        }
+    }
 
     let system_prompt = build_channel_system_prompt(ctx.system_prompt.as_str(), &msg.channel);
     let mut history = vec![ChatMessage::system(system_prompt)];
@@ -903,6 +1218,9 @@ async fn process_channel_message(
         _ => None,
     };
 
+    // Record history length before tool loop so we can extract tool context after.
+    let history_len_before_tools = history.len();
+
     enum LlmExecutionResult {
         Completed(Result<Result<String, anyhow::Error>, tokio::time::error::Elapsed>),
         Cancelled,
@@ -919,7 +1237,7 @@ async fn process_channel_message(
                 ctx.observer.as_ref(),
                 route.provider.as_str(),
                 route.model.as_str(),
-                ctx.temperature,
+                runtime_defaults.temperature,
                 true,
                 None,
                 msg.channel.as_str(),
@@ -958,10 +1276,20 @@ async fn process_channel_message(
             }
         }
         LlmExecutionResult::Completed(Ok(Ok(response))) => {
+            // Extract condensed tool-use context from the history messages
+            // added during run_tool_call_loop, so the LLM retains awareness
+            // of what it did on subsequent turns.
+            let tool_summary = extract_tool_context_summary(&history, history_len_before_tools);
+            let history_response = if tool_summary.is_empty() {
+                response.clone()
+            } else {
+                format!("{tool_summary}\n{response}")
+            };
+
             append_sender_turn(
                 ctx.as_ref(),
                 &history_key,
-                ChatMessage::assistant(&response),
+                ChatMessage::assistant(&history_response),
             );
             println!(
                 "  🤖 Reply ({}ms): {}",
@@ -1226,13 +1554,7 @@ pub fn build_system_prompt(
         for (name, desc) in tools {
             let _ = writeln!(prompt, "- **{name}**: {desc}");
         }
-        prompt.push_str("\n## Tool Use Protocol\n\n");
-        prompt.push_str("To use a tool, wrap a JSON object in <tool_call></tool_call> tags:\n\n");
-        prompt.push_str("```\n<tool_call>\n{\"name\": \"tool_name\", \"arguments\": {\"param\": \"value\"}}\n</tool_call>\n```\n\n");
-        prompt.push_str("You may use multiple tool calls in a single response. ");
-        prompt.push_str("After tool execution, results appear in <tool_result> tags. ");
-        prompt
-            .push_str("Continue reasoning with the results until you can give a final answer.\n\n");
+        prompt.push('\n');
     }
 
     // ── 1b. Hardware (when gpio/arduino tools present) ───────────
@@ -1344,10 +1666,7 @@ pub fn build_system_prompt(
 
     // ── 8. Channel Capabilities ─────────────────────────────────────
     prompt.push_str("## Channel Capabilities\n\n");
-    prompt.push_str(
-        "- You are running as a Discord bot. You CAN and do send messages to Discord channels.\n",
-    );
-    prompt.push_str("- When someone messages you on Discord, your response is automatically sent back to Discord.\n");
+    prompt.push_str("- You are running as a messaging bot. Your response is automatically sent back to the user's channel.\n");
     prompt.push_str("- You do NOT need to ask permission to respond — just respond directly.\n");
     prompt.push_str("- NEVER repeat, describe, or echo credentials, tokens, API keys, or secrets in your responses.\n");
     prompt.push_str("- If a tool output contains credentials, they have already been redacted — do not mention them.\n\n");
@@ -1895,10 +2214,7 @@ pub async fn doctor_channels(config: Config) -> Result<()> {
 /// Start all configured channels and route messages to the agent
 #[allow(clippy::too_many_lines)]
 pub async fn start_channels(config: Config) -> Result<()> {
-    let provider_name = config
-        .default_provider
-        .clone()
-        .unwrap_or_else(|| "openrouter".into());
+    let provider_name = resolved_default_provider(&config);
     let provider_runtime_options = providers::ProviderRuntimeOptions {
         auth_profile_override: None,
         zeroclaw_dir: config.config_path.parent().map(std::path::PathBuf::from),
@@ -1919,6 +2235,20 @@ pub async fn start_channels(config: Config) -> Result<()> {
         tracing::warn!("Provider warmup failed (non-fatal): {e}");
     }
 
+    let initial_stamp = config_file_stamp(&config.config_path).await;
+    {
+        let mut store = runtime_config_store()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        store.insert(
+            config.config_path.clone(),
+            RuntimeConfigState {
+                defaults: runtime_defaults_from_config(&config),
+                last_applied_stamp: initial_stamp,
+            },
+        );
+    }
+
     let observer: Arc<dyn Observer> =
         Arc::from(observability::create_observer(&config.observability));
     let runtime: Arc<dyn runtime::RuntimeAdapter> =
@@ -1927,10 +2257,7 @@ pub async fn start_channels(config: Config) -> Result<()> {
         &config.autonomy,
         &config.workspace_dir,
     ));
-    let model = config
-        .default_model
-        .clone()
-        .unwrap_or_else(|| "anthropic/claude-sonnet-4-20250514".into());
+    let model = resolved_default_model(&config);
     let temperature = config.default_temperature;
     let mem: Arc<dyn Memory> = Arc::from(memory::create_memory_with_storage(
         &config.memory,
@@ -3156,6 +3483,165 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn process_channel_message_prefers_cached_default_provider_instance() {
+        let channel_impl = Arc::new(TelegramRecordingChannel::default());
+        let channel: Arc<dyn Channel> = channel_impl.clone();
+
+        let mut channels_by_name = HashMap::new();
+        channels_by_name.insert(channel.name().to_string(), channel);
+
+        let startup_provider_impl = Arc::new(ModelCaptureProvider::default());
+        let startup_provider: Arc<dyn Provider> = startup_provider_impl.clone();
+        let reloaded_provider_impl = Arc::new(ModelCaptureProvider::default());
+        let reloaded_provider: Arc<dyn Provider> = reloaded_provider_impl.clone();
+
+        let mut provider_cache_seed: HashMap<String, Arc<dyn Provider>> = HashMap::new();
+        provider_cache_seed.insert("test-provider".to_string(), reloaded_provider);
+
+        let runtime_ctx = Arc::new(ChannelRuntimeContext {
+            channels_by_name: Arc::new(channels_by_name),
+            provider: Arc::clone(&startup_provider),
+            default_provider: Arc::new("test-provider".to_string()),
+            memory: Arc::new(NoopMemory),
+            tools_registry: Arc::new(vec![]),
+            observer: Arc::new(NoopObserver),
+            system_prompt: Arc::new("test-system-prompt".to_string()),
+            model: Arc::new("default-model".to_string()),
+            temperature: 0.0,
+            auto_save_memory: false,
+            max_tool_iterations: 5,
+            min_relevance_score: 0.0,
+            conversation_histories: Arc::new(Mutex::new(HashMap::new())),
+            provider_cache: Arc::new(Mutex::new(provider_cache_seed)),
+            route_overrides: Arc::new(Mutex::new(HashMap::new())),
+            api_key: None,
+            api_url: None,
+            reliability: Arc::new(crate::config::ReliabilityConfig::default()),
+            provider_runtime_options: providers::ProviderRuntimeOptions::default(),
+            workspace_dir: Arc::new(std::env::temp_dir()),
+            message_timeout_secs: CHANNEL_MESSAGE_TIMEOUT_SECS,
+            interrupt_on_new_message: false,
+            multimodal: crate::config::MultimodalConfig::default(),
+        });
+
+        process_channel_message(
+            runtime_ctx,
+            traits::ChannelMessage {
+                id: "msg-default-provider-cache".to_string(),
+                sender: "alice".to_string(),
+                reply_target: "chat-1".to_string(),
+                content: "hello cached default provider".to_string(),
+                channel: "telegram".to_string(),
+                timestamp: 3,
+                thread_ts: None,
+            },
+            CancellationToken::new(),
+        )
+        .await;
+
+        assert_eq!(startup_provider_impl.call_count.load(Ordering::SeqCst), 0);
+        assert_eq!(reloaded_provider_impl.call_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn process_channel_message_uses_runtime_default_model_from_store() {
+        let channel_impl = Arc::new(TelegramRecordingChannel::default());
+        let channel: Arc<dyn Channel> = channel_impl.clone();
+
+        let mut channels_by_name = HashMap::new();
+        channels_by_name.insert(channel.name().to_string(), channel);
+
+        let provider_impl = Arc::new(ModelCaptureProvider::default());
+        let provider: Arc<dyn Provider> = provider_impl.clone();
+        let mut provider_cache_seed: HashMap<String, Arc<dyn Provider>> = HashMap::new();
+        provider_cache_seed.insert("test-provider".to_string(), Arc::clone(&provider));
+
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let config_path = temp.path().join("config.toml");
+
+        {
+            let mut store = runtime_config_store()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            store.insert(
+                config_path.clone(),
+                RuntimeConfigState {
+                    defaults: ChannelRuntimeDefaults {
+                        default_provider: "test-provider".to_string(),
+                        model: "hot-reloaded-model".to_string(),
+                        temperature: 0.5,
+                        api_key: None,
+                        api_url: None,
+                        reliability: crate::config::ReliabilityConfig::default(),
+                    },
+                    last_applied_stamp: None,
+                },
+            );
+        }
+
+        let runtime_ctx = Arc::new(ChannelRuntimeContext {
+            channels_by_name: Arc::new(channels_by_name),
+            provider: Arc::clone(&provider),
+            default_provider: Arc::new("test-provider".to_string()),
+            memory: Arc::new(NoopMemory),
+            tools_registry: Arc::new(vec![]),
+            observer: Arc::new(NoopObserver),
+            system_prompt: Arc::new("test-system-prompt".to_string()),
+            model: Arc::new("startup-model".to_string()),
+            temperature: 0.0,
+            auto_save_memory: false,
+            max_tool_iterations: 5,
+            min_relevance_score: 0.0,
+            conversation_histories: Arc::new(Mutex::new(HashMap::new())),
+            provider_cache: Arc::new(Mutex::new(provider_cache_seed)),
+            route_overrides: Arc::new(Mutex::new(HashMap::new())),
+            api_key: None,
+            api_url: None,
+            reliability: Arc::new(crate::config::ReliabilityConfig::default()),
+            provider_runtime_options: providers::ProviderRuntimeOptions {
+                zeroclaw_dir: Some(temp.path().to_path_buf()),
+                ..providers::ProviderRuntimeOptions::default()
+            },
+            workspace_dir: Arc::new(std::env::temp_dir()),
+            message_timeout_secs: CHANNEL_MESSAGE_TIMEOUT_SECS,
+            interrupt_on_new_message: false,
+            multimodal: crate::config::MultimodalConfig::default(),
+        });
+
+        process_channel_message(
+            runtime_ctx,
+            traits::ChannelMessage {
+                id: "msg-runtime-store-model".to_string(),
+                sender: "alice".to_string(),
+                reply_target: "chat-1".to_string(),
+                content: "hello runtime defaults".to_string(),
+                channel: "telegram".to_string(),
+                timestamp: 4,
+                thread_ts: None,
+            },
+            CancellationToken::new(),
+        )
+        .await;
+
+        {
+            let mut store = runtime_config_store()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            store.remove(&config_path);
+        }
+
+        assert_eq!(provider_impl.call_count.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            provider_impl
+                .models
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_slice(),
+            &["hot-reloaded-model".to_string()]
+        );
+    }
+
+    #[tokio::test]
     async fn process_channel_message_respects_configured_max_tool_iterations_above_default() {
         let channel_impl = Arc::new(RecordingChannel::default());
         let channel: Arc<dyn Channel> = channel_impl.clone();
@@ -3315,6 +3801,66 @@ mod tests {
 
         async fn count(&self) -> anyhow::Result<usize> {
             Ok(0)
+        }
+
+        async fn health_check(&self) -> bool {
+            true
+        }
+    }
+
+    struct RecallMemory;
+
+    #[async_trait::async_trait]
+    impl Memory for RecallMemory {
+        fn name(&self) -> &str {
+            "recall-memory"
+        }
+
+        async fn store(
+            &self,
+            _key: &str,
+            _content: &str,
+            _category: crate::memory::MemoryCategory,
+            _session_id: Option<&str>,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn recall(
+            &self,
+            _query: &str,
+            _limit: usize,
+            _session_id: Option<&str>,
+        ) -> anyhow::Result<Vec<crate::memory::MemoryEntry>> {
+            Ok(vec![crate::memory::MemoryEntry {
+                id: "entry-1".to_string(),
+                key: "memory_key_1".to_string(),
+                content: "Age is 45".to_string(),
+                category: crate::memory::MemoryCategory::Conversation,
+                timestamp: "2026-02-20T00:00:00Z".to_string(),
+                session_id: None,
+                score: Some(0.9),
+            }])
+        }
+
+        async fn get(&self, _key: &str) -> anyhow::Result<Option<crate::memory::MemoryEntry>> {
+            Ok(None)
+        }
+
+        async fn list(
+            &self,
+            _category: Option<&crate::memory::MemoryCategory>,
+            _session_id: Option<&str>,
+        ) -> anyhow::Result<Vec<crate::memory::MemoryEntry>> {
+            Ok(Vec::new())
+        }
+
+        async fn forget(&self, _key: &str) -> anyhow::Result<bool> {
+            Ok(false)
+        }
+
+        async fn count(&self) -> anyhow::Result<usize> {
+            Ok(1)
         }
 
         async fn health_check(&self) -> bool {
@@ -3655,6 +4201,26 @@ mod tests {
     }
 
     #[test]
+    fn prompt_includes_single_tool_protocol_block_after_append() {
+        let ws = make_workspace();
+        let tools = vec![("shell", "Run commands")];
+        let mut prompt = build_system_prompt(ws.path(), "gpt-4o", &tools, &[], None, None);
+
+        assert!(
+            !prompt.contains("## Tool Use Protocol"),
+            "build_system_prompt should not emit protocol block directly"
+        );
+
+        prompt.push_str(&build_tool_instructions(&[]));
+
+        assert_eq!(
+            prompt.matches("## Tool Use Protocol").count(),
+            1,
+            "protocol block should appear exactly once in the final prompt"
+        );
+    }
+
+    #[test]
     fn prompt_injects_safety() {
         let ws = make_workspace();
         let prompt = build_system_prompt(ws.path(), "model", &[], &[], None, None);
@@ -3884,8 +4450,8 @@ mod tests {
             "missing Channel Capabilities section"
         );
         assert!(
-            prompt.contains("running as a Discord bot"),
-            "missing Discord context"
+            prompt.contains("running as a messaging bot"),
+            "missing channel context"
         );
         assert!(
             prompt.contains("NEVER repeat, describe, or echo credentials"),
@@ -4088,6 +4654,79 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn process_channel_message_enriches_current_turn_without_persisting_context() {
+        let channel_impl = Arc::new(RecordingChannel::default());
+        let channel: Arc<dyn Channel> = channel_impl.clone();
+
+        let mut channels_by_name = HashMap::new();
+        channels_by_name.insert(channel.name().to_string(), channel);
+
+        let provider_impl = Arc::new(HistoryCaptureProvider::default());
+        let runtime_ctx = Arc::new(ChannelRuntimeContext {
+            channels_by_name: Arc::new(channels_by_name),
+            provider: provider_impl.clone(),
+            default_provider: Arc::new("test-provider".to_string()),
+            memory: Arc::new(RecallMemory),
+            tools_registry: Arc::new(vec![]),
+            observer: Arc::new(NoopObserver),
+            system_prompt: Arc::new("test-system-prompt".to_string()),
+            model: Arc::new("test-model".to_string()),
+            temperature: 0.0,
+            auto_save_memory: false,
+            max_tool_iterations: 5,
+            min_relevance_score: 0.0,
+            conversation_histories: Arc::new(Mutex::new(HashMap::new())),
+            provider_cache: Arc::new(Mutex::new(HashMap::new())),
+            route_overrides: Arc::new(Mutex::new(HashMap::new())),
+            api_key: None,
+            api_url: None,
+            reliability: Arc::new(crate::config::ReliabilityConfig::default()),
+            provider_runtime_options: providers::ProviderRuntimeOptions::default(),
+            workspace_dir: Arc::new(std::env::temp_dir()),
+            message_timeout_secs: CHANNEL_MESSAGE_TIMEOUT_SECS,
+            interrupt_on_new_message: false,
+            multimodal: crate::config::MultimodalConfig::default(),
+        });
+
+        process_channel_message(
+            runtime_ctx.clone(),
+            traits::ChannelMessage {
+                id: "msg-ctx-1".to_string(),
+                sender: "alice".to_string(),
+                reply_target: "chat-ctx".to_string(),
+                content: "hello".to_string(),
+                channel: "test-channel".to_string(),
+                timestamp: 1,
+                thread_ts: None,
+            },
+            CancellationToken::new(),
+        )
+        .await;
+
+        let calls = provider_impl
+            .calls
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].len(), 2);
+        assert_eq!(calls[0][1].0, "user");
+        assert!(calls[0][1].1.contains("[Memory context]"));
+        assert!(calls[0][1].1.contains("Age is 45"));
+        assert!(calls[0][1].1.contains("hello"));
+
+        let histories = runtime_ctx
+            .conversation_histories
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let turns = histories
+            .get("test-channel_alice")
+            .expect("history should be stored for sender");
+        assert_eq!(turns[0].role, "user");
+        assert_eq!(turns[0].content, "hello");
+        assert!(!turns[0].content.contains("[Memory context]"));
+    }
+
+    #[tokio::test]
     async fn process_channel_message_telegram_keeps_system_instruction_at_top_only() {
         let channel_impl = Arc::new(TelegramRecordingChannel::default());
         let channel: Arc<dyn Channel> = channel_impl.clone();
@@ -4166,6 +4805,63 @@ mod tests {
             "telegram delivery instruction should live in the system prompt"
         );
         assert!(!calls[0].iter().skip(1).any(|(role, _)| role == "system"));
+    }
+
+    #[test]
+    fn extract_tool_context_summary_collects_alias_and_native_tool_calls() {
+        let history = vec![
+            ChatMessage::system("sys"),
+            ChatMessage::assistant(
+                r#"<toolcall>
+{"name":"shell","arguments":{"command":"date"}}
+</toolcall>"#,
+            ),
+            ChatMessage::assistant(
+                r#"{"content":null,"tool_calls":[{"id":"1","name":"web_search","arguments":"{}"}]}"#,
+            ),
+        ];
+
+        let summary = extract_tool_context_summary(&history, 1);
+        assert_eq!(summary, "[Used tools: shell, web_search]");
+    }
+
+    #[test]
+    fn extract_tool_context_summary_collects_prompt_mode_tool_result_names() {
+        let history = vec![
+            ChatMessage::system("sys"),
+            ChatMessage::assistant("Using markdown tool call fence"),
+            ChatMessage::user(
+                r#"[Tool results]
+<tool_result name="http_request">
+{"status":200}
+</tool_result>
+<tool_result name="shell">
+Mon Feb 20
+</tool_result>"#,
+            ),
+        ];
+
+        let summary = extract_tool_context_summary(&history, 1);
+        assert_eq!(summary, "[Used tools: http_request, shell]");
+    }
+
+    #[test]
+    fn extract_tool_context_summary_respects_start_index() {
+        let history = vec![
+            ChatMessage::assistant(
+                r#"<tool_call>
+{"name":"stale_tool","arguments":{}}
+</tool_call>"#,
+            ),
+            ChatMessage::assistant(
+                r#"<tool_call>
+{"name":"fresh_tool","arguments":{}}
+</tool_call>"#,
+            ),
+        ];
+
+        let summary = extract_tool_context_summary(&history, 1);
+        assert_eq!(summary, "[Used tools: fresh_tool]");
     }
 
     // ── AIEOS Identity Tests (Issue #168) ─────────────────────────

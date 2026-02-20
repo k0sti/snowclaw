@@ -26,6 +26,10 @@ const STREAM_CHUNK_MIN_CHARS: usize = 80;
 /// Used as a safe fallback when `max_tool_iterations` is unset or configured as zero.
 const DEFAULT_MAX_TOOL_ITERATIONS: usize = 10;
 
+/// Minimum user-message length (in chars) for auto-save to memory.
+/// Matches the channel-side constant in `channels/mod.rs`.
+const AUTOSAVE_MIN_MESSAGE_CHARS: usize = 20;
+
 static SENSITIVE_KEY_PATTERNS: LazyLock<RegexSet> = LazyLock::new(|| {
     RegexSet::new([
         r"(?i)token",
@@ -590,6 +594,17 @@ fn parse_glm_style_tool_calls(text: &str) -> Vec<(String, serde_json::Value, Opt
     calls
 }
 
+// ── Tool-Call Parsing ─────────────────────────────────────────────────────
+// LLM responses may contain tool calls in multiple formats depending on
+// the provider. Parsing follows a priority chain:
+//   1. OpenAI-style JSON with `tool_calls` array (native API)
+//   2. XML tags: <tool_call>, <toolcall>, <tool-call>, <invoke>
+//   3. Markdown code blocks with `tool_call` language
+//   4. GLM-style line-based format (e.g. `shell/command>ls`)
+// SECURITY: We never fall back to extracting arbitrary JSON from the
+// response body, because that would enable prompt-injection attacks where
+// malicious content in emails/files/web pages mimics a tool call.
+
 /// Parse tool calls from an LLM response that uses XML-style function calling.
 ///
 /// Expected format (common with system-prompt-guided tool use):
@@ -874,6 +889,18 @@ pub(crate) async fn agent_turn(
     .await
 }
 
+// ── Agent Tool-Call Loop ──────────────────────────────────────────────────
+// Core agentic iteration: send conversation to the LLM, parse any tool
+// calls from the response, execute them, append results to history, and
+// repeat until the LLM produces a final text-only answer.
+//
+// Loop invariant: at the start of each iteration, `history` contains the
+// full conversation so far (system prompt + user messages + prior tool
+// results). The loop exits when:
+//   • the LLM returns no tool calls (final answer), or
+//   • max_iterations is reached (runaway safety), or
+//   • the cancellation token fires (external abort).
+
 /// Execute a single turn of the agent loop: send messages, parse tool calls,
 /// execute tools, and loop until the LLM produces a final text response.
 #[allow(clippy::too_many_arguments)]
@@ -972,6 +999,10 @@ pub(crate) async fn run_tool_call_loop(
                     });
 
                     let response_text = resp.text_or_empty().to_string();
+                    // First try native structured tool calls (OpenAI-format).
+                    // Fall back to text-based parsing (XML tags, markdown blocks,
+                    // GLM format) only if the provider returned no native calls —
+                    // this ensures we support both native and prompt-guided models.
                     let mut calls = parse_structured_tool_calls(&resp.tool_calls);
                     let mut parsed_text = String::new();
 
@@ -1189,6 +1220,12 @@ pub(crate) fn build_tool_instructions(tools_registry: &[Box<dyn Tool>]) -> Strin
 
     instructions
 }
+
+// ── CLI Entrypoint ───────────────────────────────────────────────────────
+// Wires up all subsystems (observer, runtime, security, memory, tools,
+// provider, hardware RAG, peripherals) and enters either single-shot or
+// interactive REPL mode. The interactive loop manages history compaction
+// and hard trimming to keep the context window bounded.
 
 #[allow(clippy::too_many_lines)]
 pub async fn run(
@@ -1442,8 +1479,8 @@ pub async fn run(
     let mut final_output = String::new();
 
     if let Some(msg) = message {
-        // Auto-save user message to memory
-        if config.memory.auto_save {
+        // Auto-save user message to memory (skip short/trivial messages)
+        if config.memory.auto_save && msg.chars().count() >= AUTOSAVE_MIN_MESSAGE_CHARS {
             let user_key = autosave_memory_key("user_msg");
             let _ = mem
                 .store(&user_key, &msg, MemoryCategory::Conversation, None)
@@ -1564,8 +1601,10 @@ pub async fn run(
                 _ => {}
             }
 
-            // Auto-save conversation turns
-            if config.memory.auto_save {
+            // Auto-save conversation turns (skip short/trivial messages)
+            if config.memory.auto_save
+                && user_input.chars().count() >= AUTOSAVE_MIN_MESSAGE_CHARS
+            {
                 let user_key = autosave_memory_key("user_msg");
                 let _ = mem
                     .store(&user_key, &user_input, MemoryCategory::Conversation, None)
