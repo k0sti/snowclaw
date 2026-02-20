@@ -74,6 +74,7 @@ mod providers;
 mod runtime;
 mod security;
 mod service;
+mod memory_cli;
 mod skillforge;
 mod skills;
 mod task_cli;
@@ -319,6 +320,26 @@ Examples:
     Task {
         #[command(subcommand)]
         task_command: task_cli::TaskCommands,
+    },
+
+    /// Manage agent memory (show, list, note, forget)
+    #[command(long_about = "\
+Manage agent memory.
+
+Show, list, store, and forget memory entries. Uses the configured \
+memory backend (nostr, sqlite, markdown, etc.).
+
+Examples:
+  snowclaw memory list
+  snowclaw memory list --category core
+  snowclaw memory show my-key
+  snowclaw memory note my-key 'Important fact'
+  snowclaw memory note my-key 'Daily log' --category daily
+  snowclaw memory forget old-key
+  snowclaw memory count")]
+    Memory {
+        #[command(subcommand)]
+        memory_command: memory_cli::MemoryCommands,
     },
 
     /// Migrate data from other agent runtimes
@@ -908,6 +929,10 @@ async fn main() -> Result<()> {
         }
 
         Commands::Task { task_command } => task_cli::handle_command(task_command, &config),
+
+        Commands::Memory { memory_command } => {
+            memory_cli::handle_command(memory_command, &config).await
+        }
 
         Commands::Migrate { migrate_command } => {
             migration::handle_command(migrate_command, &config).await
