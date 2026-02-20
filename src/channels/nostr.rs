@@ -24,6 +24,11 @@ use crate::security::key_filter::{self, KeyFilter};
 /// Default capacity for the LRU event cache.
 const EVENT_CACHE_CAPACITY: usize = 1000;
 
+/// Agent attribution tag added to all published events (1.20).
+fn agent_tag() -> Tag {
+    Tag::custom(TagKind::custom("agent"), vec!["snowclaw".to_string()])
+}
+
 /// Respond mode for group messages
 #[derive(Debug, Clone, PartialEq)]
 pub enum RespondMode {
@@ -736,7 +741,10 @@ impl NostrChannel {
 
     /// Publish a kind 9 group message
     pub async fn send_group_message(&self, group: &str, content: &str) -> Result<EventId> {
-        let tags = vec![Tag::custom(TagKind::custom("h"), vec![group.to_string()])];
+        let tags = vec![
+            Tag::custom(TagKind::custom("h"), vec![group.to_string()]),
+            agent_tag(),
+        ];
 
         let builder = EventBuilder::new(Kind::Custom(9), content).tags(tags);
 
@@ -753,7 +761,7 @@ impl NostrChannel {
 
     /// Publish a NIP-17 gift-wrapped DM
     pub async fn send_dm(&self, recipient: &PublicKey, content: &str) -> Result<()> {
-        let extra_tags: Vec<Tag> = vec![];
+        let extra_tags: Vec<Tag> = vec![agent_tag()];
         self.client
             .send_private_msg(*recipient, content, extra_tags)
             .await
@@ -780,6 +788,7 @@ impl NostrChannel {
             Tag::custom(TagKind::custom("d"), vec!["snowclaw:status".to_string()]),
             Tag::custom(TagKind::custom("status"), vec!["online".to_string()]),
             Tag::custom(TagKind::custom("version"), vec!["0.1.0".to_string()]),
+            agent_tag(),
         ];
 
         let builder = EventBuilder::new(Kind::Custom(31121), content.to_string()).tags(tags);
@@ -813,7 +822,10 @@ impl NostrChannel {
         };
 
         // Build tags: bot tag + optional owner p-tag
-        let mut tags: Vec<Tag> = vec![Tag::custom(TagKind::Custom("bot".into()), Vec::<String>::new())];
+        let mut tags: Vec<Tag> = vec![
+            Tag::custom(TagKind::Custom("bot".into()), Vec::<String>::new()),
+            agent_tag(),
+        ];
         if let Some(owner) = &self.config.owner {
             tags.push(Tag::public_key(*owner));
         }
@@ -844,6 +856,7 @@ impl NostrChannel {
                 vec![format!("{}.result", action)],
             ),
             Tag::custom(TagKind::custom("status"), vec![status.to_string()]),
+            agent_tag(),
         ];
 
         let builder = EventBuilder::new(Kind::Custom(1121), content).tags(tags);
@@ -1005,7 +1018,10 @@ impl NostrChannel {
         respond_mode: Option<&str>,
         context_history: Option<usize>,
     ) -> Result<EventId> {
-        let mut tags = vec![Tag::custom(TagKind::custom("d"), vec![d_tag.to_string()])];
+        let mut tags = vec![
+            Tag::custom(TagKind::custom("d"), vec![d_tag.to_string()]),
+            agent_tag(),
+        ];
 
         if let Some(mode) = respond_mode {
             tags.push(Tag::custom(
