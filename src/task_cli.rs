@@ -2,6 +2,7 @@
 //!
 //! Provides `snowclaw task create`, `task list`, `task status`, and `task update`
 //! using the local task store (nostr_tasks.json in workspace).
+//! Tasks use sequential SNOW-N IDs (e.g. SNOW-1, SNOW-2).
 
 use anyhow::{bail, Result};
 use clap::Subcommand;
@@ -29,12 +30,12 @@ pub enum TaskCommands {
     },
     /// Show task status and history
     Status {
-        /// Task ID
+        /// Task ID (e.g. SNOW-1 or just 1)
         id: String,
     },
     /// Update a task's status
     Update {
-        /// Task ID
+        /// Task ID (e.g. SNOW-1 or just 1)
         id: String,
         /// New status: draft, queued, executing, blocked, review, done, failed, cancelled
         #[arg(short, long)]
@@ -73,7 +74,7 @@ fn save_tasks(config: &Config, tasks: &[serde_json::Value]) -> Result<()> {
 }
 
 /// Map status string to Nostr event kind.
-fn status_to_kind(status: &str) -> Result<u16> {
+pub fn status_to_kind(status: &str) -> Result<u16> {
     match status {
         "queued" => Ok(1630),
         "done" => Ok(1631),
@@ -87,6 +88,63 @@ fn status_to_kind(status: &str) -> Result<u16> {
     }
 }
 
+/// Extract the numeric part from a SNOW-N task ID.
+fn parse_snow_number(id: &str) -> Option<u64> {
+    id.strip_prefix("SNOW-")
+        .and_then(|n| n.parse::<u64>().ok())
+}
+
+/// Derive the next SNOW-N number from existing tasks.
+fn next_task_number(tasks: &[serde_json::Value]) -> u64 {
+    let max = tasks
+        .iter()
+        .filter_map(|t| t.get("id").and_then(|v| v.as_str()))
+        .filter_map(parse_snow_number)
+        .max()
+        .unwrap_or(0);
+    max + 1
+}
+
+/// Normalize a user-provided task ID to SNOW-N format.
+/// Accepts "SNOW-1", "snow-1", or just "1".
+fn normalize_task_id(input: &str) -> String {
+    let trimmed = input.trim();
+    if let Ok(n) = trimmed.parse::<u64>() {
+        return format!("SNOW-{n}");
+    }
+    if let Some(n) = trimmed
+        .to_uppercase()
+        .strip_prefix("SNOW-")
+        .and_then(|s| s.parse::<u64>().ok())
+    {
+        return format!("SNOW-{n}");
+    }
+    // Legacy: support old task-{timestamp} IDs
+    trimmed.to_string()
+}
+
+/// Find a task by normalized ID.
+fn find_task<'a>(
+    tasks: &'a [serde_json::Value],
+    id: &str,
+) -> Option<&'a serde_json::Value> {
+    let normalized = normalize_task_id(id);
+    tasks
+        .iter()
+        .find(|t| t.get("id").and_then(|v| v.as_str()) == Some(&normalized))
+}
+
+/// Find a task by normalized ID (mutable).
+fn find_task_mut<'a>(
+    tasks: &'a mut [serde_json::Value],
+    id: &str,
+) -> Option<&'a mut serde_json::Value> {
+    let normalized = normalize_task_id(id);
+    tasks
+        .iter_mut()
+        .find(|t| t.get("id").and_then(|v| v.as_str()) == Some(&normalized))
+}
+
 pub fn handle_command(cmd: TaskCommands, config: &Config) -> Result<()> {
     match cmd {
         TaskCommands::Create {
@@ -96,7 +154,9 @@ pub fn handle_command(cmd: TaskCommands, config: &Config) -> Result<()> {
         } => {
             let _kind = status_to_kind(&status)?;
 
-            let task_id = format!("task-{}", chrono::Utc::now().timestamp_millis());
+            let mut tasks = load_tasks(config)?;
+            let number = next_task_number(&tasks);
+            let task_id = format!("SNOW-{number}");
             let now = chrono::Utc::now().to_rfc3339();
 
             let task = serde_json::json!({
@@ -114,11 +174,10 @@ pub fn handle_command(cmd: TaskCommands, config: &Config) -> Result<()> {
                 }]
             });
 
-            let mut tasks = load_tasks(config)?;
             tasks.push(task);
             save_tasks(config, &tasks)?;
 
-            println!("Created task {task_id}: {title}");
+            println!("Created {task_id}: {title}");
             Ok(())
         }
 
@@ -155,12 +214,11 @@ pub fn handle_command(cmd: TaskCommands, config: &Config) -> Result<()> {
 
         TaskCommands::Status { id } => {
             let tasks = load_tasks(config)?;
-            let task = tasks
-                .iter()
-                .find(|t| t.get("id").and_then(|v| v.as_str()) == Some(&id));
+            let task = find_task(&tasks, &id);
 
             match task {
                 Some(task) => {
+                    let task_id = task.get("id").and_then(|v| v.as_str()).unwrap_or("?");
                     let title = task.get("title").and_then(|v| v.as_str()).unwrap_or("?");
                     let status = task.get("status").and_then(|v| v.as_str()).unwrap_or("?");
                     let desc = task
@@ -176,7 +234,7 @@ pub fn handle_command(cmd: TaskCommands, config: &Config) -> Result<()> {
                         .and_then(|v| v.as_str())
                         .unwrap_or("?");
 
-                    println!("Task: {id}");
+                    println!("Task: {task_id}");
                     println!("  Title:   {title}");
                     println!("  Status:  {status}");
                     if !desc.is_empty() {
@@ -212,7 +270,8 @@ pub fn handle_command(cmd: TaskCommands, config: &Config) -> Result<()> {
                     Ok(())
                 }
                 None => {
-                    println!("Task not found: {id}");
+                    let normalized = normalize_task_id(&id);
+                    println!("Task not found: {normalized}");
                     Ok(())
                 }
             }
@@ -227,12 +286,15 @@ pub fn handle_command(cmd: TaskCommands, config: &Config) -> Result<()> {
             let mut tasks = load_tasks(config)?;
             let now = chrono::Utc::now().to_rfc3339();
 
-            let task = tasks
-                .iter_mut()
-                .find(|t| t.get("id").and_then(|v| v.as_str()) == Some(&id));
+            let task = find_task_mut(&mut tasks, &id);
 
             match task {
                 Some(task) => {
+                    let task_id = task
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("?")
+                        .to_string();
                     task["status"] = serde_json::json!(status);
                     task["updated_at"] = serde_json::json!(now);
                     if let Some(history) = task.get_mut("status_history") {
@@ -246,13 +308,42 @@ pub fn handle_command(cmd: TaskCommands, config: &Config) -> Result<()> {
                         }
                     }
                     save_tasks(config, &tasks)?;
-                    println!("Updated task {id} to {status}");
+                    println!("Updated {task_id} to {status}");
                     Ok(())
                 }
                 None => {
-                    bail!("Task not found: {id}")
+                    let normalized = normalize_task_id(&id);
+                    bail!("Task not found: {normalized}")
                 }
             }
         }
     }
+}
+
+/// Create a task programmatically (used by channel message handler).
+/// Returns the task ID (e.g. "SNOW-3").
+pub fn create_task(config: &Config, title: &str, description: &str) -> Result<String> {
+    let mut tasks = load_tasks(config)?;
+    let number = next_task_number(&tasks);
+    let task_id = format!("SNOW-{number}");
+    let now = chrono::Utc::now().to_rfc3339();
+
+    let task = serde_json::json!({
+        "id": task_id,
+        "title": title,
+        "description": description,
+        "status": "draft",
+        "created_at": now,
+        "updated_at": now,
+        "kind": 1621,
+        "status_history": [{
+            "status": "draft",
+            "kind": 1633,
+            "timestamp": now,
+        }]
+    });
+
+    tasks.push(task);
+    save_tasks(config, &tasks)?;
+    Ok(task_id)
 }

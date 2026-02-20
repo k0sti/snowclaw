@@ -2,6 +2,7 @@
 //!
 //! Exposes task creation, status updates, and listing as an agent-callable tool
 //! via the Nostr event protocol (kind 1621 for tasks, 1630-1637 for status).
+//! Tasks use sequential SNOW-N IDs (e.g. SNOW-1, SNOW-2).
 
 use async_trait::async_trait;
 use serde_json::json;
@@ -49,6 +50,35 @@ impl NostrTaskTool {
         std::fs::write(&path, json)?;
         Ok(())
     }
+
+    /// Derive the next SNOW-N number from existing tasks.
+    fn next_task_number(&self, tasks: &[serde_json::Value]) -> u64 {
+        let max = tasks
+            .iter()
+            .filter_map(|t| t.get("id").and_then(|v| v.as_str()))
+            .filter_map(|id| id.strip_prefix("SNOW-"))
+            .filter_map(|n| n.parse::<u64>().ok())
+            .max()
+            .unwrap_or(0);
+        max + 1
+    }
+
+    /// Normalize a task ID to SNOW-N format.
+    fn normalize_task_id(input: &str) -> String {
+        let trimmed = input.trim();
+        if let Ok(n) = trimmed.parse::<u64>() {
+            return format!("SNOW-{n}");
+        }
+        if let Some(n) = trimmed
+            .to_uppercase()
+            .strip_prefix("SNOW-")
+            .and_then(|s| s.parse::<u64>().ok())
+        {
+            return format!("SNOW-{n}");
+        }
+        // Legacy: support old task-{timestamp} IDs
+        trimmed.to_string()
+    }
 }
 
 #[async_trait]
@@ -59,6 +89,7 @@ impl Tool for NostrTaskTool {
 
     fn description(&self) -> &str {
         "Manage Nostr-native tasks. Actions: create (new task), update (change status), list (show tasks). \
+         Task IDs use SNOW-N format (e.g. SNOW-1). \
          Task statuses: draft, queued, executing, blocked, review, done, failed, cancelled."
     }
 
@@ -81,7 +112,7 @@ impl Tool for NostrTaskTool {
                 },
                 "task_id": {
                     "type": "string",
-                    "description": "Task ID (for update)"
+                    "description": "Task ID, e.g. SNOW-1 (for update)"
                 },
                 "status": {
                     "type": "string",
@@ -118,10 +149,9 @@ impl Tool for NostrTaskTool {
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
 
-                let task_id = format!(
-                    "task-{}",
-                    chrono::Utc::now().timestamp_millis()
-                );
+                let mut tasks = self.load_tasks()?;
+                let number = self.next_task_number(&tasks);
+                let task_id = format!("SNOW-{number}");
                 let now = chrono::Utc::now().to_rfc3339();
 
                 let task = json!({
@@ -139,19 +169,18 @@ impl Tool for NostrTaskTool {
                     }]
                 });
 
-                let mut tasks = self.load_tasks()?;
                 tasks.push(task);
                 self.save_tasks(&tasks)?;
 
                 Ok(ToolResult {
                     success: true,
-                    output: format!("Created task {task_id}: {title}"),
+                    output: format!("Created {task_id}: {title}"),
                     error: None,
                 })
             }
 
             "update" => {
-                let task_id = match args.get("task_id").and_then(|v| v.as_str()) {
+                let raw_id = match args.get("task_id").and_then(|v| v.as_str()) {
                     Some(id) => id,
                     None => {
                         return Ok(ToolResult {
@@ -161,6 +190,7 @@ impl Tool for NostrTaskTool {
                         })
                     }
                 };
+                let task_id = Self::normalize_task_id(raw_id);
 
                 let new_status = match args.get("status").and_then(|v| v.as_str()) {
                     Some(s) => s,
@@ -200,7 +230,7 @@ impl Tool for NostrTaskTool {
                 let now = chrono::Utc::now().to_rfc3339();
 
                 let task = tasks.iter_mut().find(|t| {
-                    t.get("id").and_then(|v| v.as_str()) == Some(task_id)
+                    t.get("id").and_then(|v| v.as_str()) == Some(&task_id)
                 });
 
                 match task {
@@ -220,7 +250,7 @@ impl Tool for NostrTaskTool {
                         self.save_tasks(&tasks)?;
                         Ok(ToolResult {
                             success: true,
-                            output: format!("Updated task {task_id} to {new_status}"),
+                            output: format!("Updated {task_id} to {new_status}"),
                             error: None,
                         })
                     }
@@ -309,12 +339,28 @@ mod tests {
             .await
             .unwrap();
         assert!(result.success);
+        assert!(result.output.contains("SNOW-1"));
         assert!(result.output.contains("Test task"));
 
         let result = tool.execute(json!({"action": "list"})).await.unwrap();
         assert!(result.success);
+        assert!(result.output.contains("SNOW-1"));
         assert!(result.output.contains("Test task"));
         assert!(result.output.contains("draft"));
+    }
+
+    #[tokio::test]
+    async fn create_sequential_ids() {
+        let (tool, _tmp) = setup();
+
+        tool.execute(json!({"action": "create", "title": "First"}))
+            .await
+            .unwrap();
+        let result = tool
+            .execute(json!({"action": "create", "title": "Second"}))
+            .await
+            .unwrap();
+        assert!(result.output.contains("SNOW-2"));
     }
 
     #[tokio::test]
@@ -325,19 +371,8 @@ mod tests {
             .await
             .unwrap();
 
-        let list = tool.execute(json!({"action": "list"})).await.unwrap();
-        // Extract task ID from output
-        let task_id = list
-            .output
-            .lines()
-            .find(|l| l.contains("Update me"))
-            .and_then(|l| l.split(':').nth(0))
-            .and_then(|s| s.split(']').nth(1))
-            .map(|s| s.trim())
-            .unwrap();
-
         let result = tool
-            .execute(json!({"action": "update", "task_id": task_id, "status": "executing"}))
+            .execute(json!({"action": "update", "task_id": "SNOW-1", "status": "executing"}))
             .await
             .unwrap();
         assert!(result.success);
@@ -345,11 +380,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn update_with_bare_number() {
+        let (tool, _tmp) = setup();
+
+        tool.execute(json!({"action": "create", "title": "Bare ID test"}))
+            .await
+            .unwrap();
+
+        let result = tool
+            .execute(json!({"action": "update", "task_id": "1", "status": "done"}))
+            .await
+            .unwrap();
+        assert!(result.success);
+        assert!(result.output.contains("SNOW-1"));
+    }
+
+    #[tokio::test]
     async fn update_missing_task() {
         let (tool, _tmp) = setup();
 
         let result = tool
-            .execute(json!({"action": "update", "task_id": "nonexistent", "status": "done"}))
+            .execute(json!({"action": "update", "task_id": "SNOW-999", "status": "done"}))
             .await
             .unwrap();
         assert!(!result.success);
