@@ -237,6 +237,8 @@ impl NostrChannel {
                     let sender_npub = event.pubkey.to_bech32().unwrap_or_else(|_| event.pubkey.to_hex());
                     let is_owner = self.is_from_owner(&event);
 
+                    // Cache backfilled events for dedup against live subscription
+                    self.cache_event(&event).await;
                     self.push_history(
                         &group,
                         HistoryMessage {
@@ -1129,7 +1131,12 @@ impl Channel for NostrChannel {
                             continue;
                         }
 
-                        // Cache every processed event
+                        // Dedup: skip events already in cache (e.g. from backfill)
+                        let event_hex = event.id.to_hex();
+                        if self.event_cache.lock().await.contains(&event_hex) {
+                            debug!("Skipping already-seen event: {}", &event_hex[..8.min(event_hex.len())]);
+                            continue;
+                        }
                         self.cache_event(&event).await;
 
                         let kind = event.kind.as_u16();

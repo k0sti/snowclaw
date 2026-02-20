@@ -1175,7 +1175,9 @@ async fn process_channel_message(
     }
 
     // Task creation from group messages: "create task: <description>"
-    if let Some(task_desc) = extract_task_creation(&msg.content) {
+    // Try raw content first, then enriched content (which may have context prefixes)
+    let raw_content = msg.content.lines().last().unwrap_or(&msg.content);
+    if let Some(task_desc) = extract_task_creation(raw_content).or_else(|| extract_task_creation(&msg.content)) {
         handle_task_creation_from_message(&ctx, &msg, &task_desc, target_channel.as_ref()).await;
         return;
     }
@@ -1395,7 +1397,11 @@ async fn process_channel_message(
                 started_at.elapsed().as_millis(),
                 truncate_with_ellipsis(&response, 80)
             );
-            if let Some(channel) = target_channel.as_ref() {
+            // Filter NO_REPLY / HEARTBEAT_OK — don't send silent markers to channels
+            let trimmed_response = response.trim();
+            if trimmed_response == "NO_REPLY" || trimmed_response == "HEARTBEAT_OK" {
+                tracing::debug!("Suppressed silent reply: {trimmed_response}");
+            } else if let Some(channel) = target_channel.as_ref() {
                 if let Some(ref draft_id) = draft_message_id {
                     if let Err(e) = channel
                         .finalize_draft(&msg.reply_target, draft_id, &response)
