@@ -58,7 +58,7 @@ const POSTGRES_PROFILE: MemoryBackendProfile = MemoryBackendProfile {
 
 const NOSTR_PROFILE: MemoryBackendProfile = MemoryBackendProfile {
     key: "nostr",
-    label: "Nostr — NIP-78 relay storage with local JSON cache",
+    label: "Nostr — NIP-78 relay storage with local SQLite semantic search",
     auto_save_default: true,
     uses_sqlite_hygiene: false,
     sqlite_based: false,

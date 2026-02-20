@@ -6,6 +6,7 @@ pub mod lucid;
 pub mod markdown;
 pub mod none;
 pub mod nostr;
+pub mod nostr_sqlite;
 pub mod postgres;
 pub mod response_cache;
 pub mod snapshot;
@@ -22,6 +23,7 @@ pub use lucid::LucidMemory;
 pub use markdown::MarkdownMemory;
 pub use none::NoneMemory;
 pub use nostr::NostrMemory;
+pub use nostr_sqlite::NostrSqliteMemory;
 pub use postgres::PostgresMemory;
 pub use response_cache::ResponseCache;
 pub use sqlite::SqliteMemory;
@@ -284,15 +286,31 @@ pub fn create_memory_with_storage_and_routes(
         )
     }
 
-    // Nostr backend: construct with relay config if available.
+    // Nostr backend: composite Nostr+SQLite for relay persistence + local semantic search.
     if matches!(backend_kind, MemoryBackendKind::Nostr) {
         let nsec = config.nsec.clone().or_else(|| std::env::var("SNOWCLAW_NSEC").ok());
-        return Ok(Box::new(NostrMemory::new(
+
+        let embedder: Arc<dyn embeddings::EmbeddingProvider> =
+            Arc::from(embeddings::create_embedding_provider(
+                &resolved_embedding.provider,
+                resolved_embedding.api_key.as_deref(),
+                &resolved_embedding.model,
+                resolved_embedding.dimensions,
+            ));
+
+        #[allow(clippy::cast_possible_truncation)]
+        let mem = NostrSqliteMemory::new(
             config.nostr_relay.as_deref(),
             config.local_relay.as_deref(),
             nsec.as_deref(),
             workspace_dir,
-        )));
+            embedder,
+            config.vector_weight as f32,
+            config.keyword_weight as f32,
+            config.embedding_cache_size,
+            config.sqlite_open_timeout_secs,
+        )?;
+        return Ok(Box::new(mem));
     }
 
     create_memory_with_builders(
