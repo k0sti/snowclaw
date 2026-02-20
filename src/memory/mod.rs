@@ -286,7 +286,7 @@ pub fn create_memory_with_storage_and_routes(
 
     // Nostr backend: construct with relay config if available.
     if matches!(backend_kind, MemoryBackendKind::Nostr) {
-        let nsec = std::env::var("SNOWCLAW_NSEC").ok();
+        let nsec = config.nsec.clone().or_else(|| std::env::var("SNOWCLAW_NSEC").ok());
         return Ok(Box::new(NostrMemory::new(
             config.nostr_relay.as_deref(),
             config.local_relay.as_deref(),

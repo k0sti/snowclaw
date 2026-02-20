@@ -1536,6 +1536,8 @@ pub struct MemoryConfig {
     /// Optional local relay URL for private agent data (e.g. "ws://localhost:7777")
     #[serde(default)]
     pub local_relay: Option<String>,
+    /// Nostr secret key (nsec) for signing memory events. Falls back to SNOWCLAW_NSEC env.
+    pub nsec: Option<String>,
 
     // ── SQLite backend options ─────────────────────────────────
     /// For sqlite backend: max seconds to wait when opening the DB (e.g. file locked).
@@ -1612,6 +1614,7 @@ impl Default for MemoryConfig {
             auto_hydrate: true,
             nostr_relay: None,
             local_relay: None,
+            nsec: None,
             sqlite_open_timeout_secs: None,
         }
     }
