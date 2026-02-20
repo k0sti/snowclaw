@@ -197,7 +197,8 @@ pub fn create_memory_with_storage_and_routes(
 ) -> anyhow::Result<Box<dyn Memory>> {
     let backend_name = effective_memory_backend_name(&config.backend, storage_provider);
     let backend_kind = classify_memory_backend(&backend_name);
-    let resolved_embedding = resolve_embedding_config(config, embedding_routes, api_key);
+    let embedding_key = config.embedding_api_key.as_deref().or(api_key);
+    let resolved_embedding = resolve_embedding_config(config, embedding_routes, embedding_key);
 
     // Best-effort memory hygiene/retention pass (throttled by state file).
     if let Err(e) = hygiene::run_if_due(config, workspace_dir) {

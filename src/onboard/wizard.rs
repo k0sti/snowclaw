@@ -323,6 +323,7 @@ fn memory_config_defaults_for_backend(backend: &str) -> MemoryConfig {
         auto_hydrate: true,
         nostr_relay: None,
         nsec: None,
+        embedding_api_key: None,
         local_relay: None,
         sqlite_open_timeout_secs: None,
     }

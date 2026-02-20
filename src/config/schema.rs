@@ -1503,6 +1503,9 @@ pub struct MemoryConfig {
     /// Max embedding cache entries before LRU eviction
     #[serde(default = "default_cache_size")]
     pub embedding_cache_size: usize,
+    /// API key for the embedding provider (overrides the main api_key for embeddings)
+    #[serde(default)]
+    pub embedding_api_key: Option<String>,
     /// Max tokens per chunk for document splitting
     #[serde(default = "default_chunk_size")]
     pub chunk_max_tokens: usize,
@@ -1605,6 +1608,7 @@ impl Default for MemoryConfig {
             keyword_weight: default_keyword_weight(),
             min_relevance_score: default_min_relevance_score(),
             embedding_cache_size: default_cache_size(),
+            embedding_api_key: None,
             chunk_max_tokens: default_chunk_size(),
             response_cache_enabled: false,
             response_cache_ttl_minutes: default_response_cache_ttl(),
