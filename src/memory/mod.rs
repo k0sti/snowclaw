@@ -5,6 +5,7 @@ pub mod hygiene;
 pub mod lucid;
 pub mod markdown;
 pub mod none;
+pub mod nostr;
 pub mod postgres;
 pub mod response_cache;
 pub mod snapshot;
@@ -20,6 +21,7 @@ pub use backend::{
 pub use lucid::LucidMemory;
 pub use markdown::MarkdownMemory;
 pub use none::NoneMemory;
+pub use nostr::NostrMemory;
 pub use postgres::PostgresMemory;
 pub use response_cache::ResponseCache;
 pub use sqlite::SqliteMemory;
@@ -51,6 +53,7 @@ where
         }
         MemoryBackendKind::Postgres => Ok(Box::new(postgres_builder()?)),
         MemoryBackendKind::Markdown => Ok(Box::new(MarkdownMemory::new(workspace_dir))),
+        MemoryBackendKind::Nostr => Ok(Box::new(NostrMemory::new(workspace_dir))),
         MemoryBackendKind::None => Ok(Box::new(NoneMemory::new())),
         MemoryBackendKind::Unknown => {
             tracing::warn!(
