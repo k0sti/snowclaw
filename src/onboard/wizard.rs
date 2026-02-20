@@ -346,7 +346,7 @@ pub async fn run_quick_setup(
     let home = directories::UserDirs::new()
         .map(|u| u.home_dir().to_path_buf())
         .context("Could not find home directory")?;
-    let zeroclaw_dir = home.join(".zeroclaw");
+    let zeroclaw_dir = home.join(".snowclaw");
     let workspace_dir = zeroclaw_dir.join("workspace");
     let config_path = zeroclaw_dir.join("config.toml");
 
@@ -488,7 +488,7 @@ pub async fn run_quick_setup(
     println!("  {}", style("Next steps:").white().bold());
     if credential_override.is_none() {
         println!("    1. Set your API key:  export OPENROUTER_API_KEY=\"sk-...\"");
-        println!("    2. Or edit:           ~/.zeroclaw/config.toml");
+        println!("    2. Or edit:           ~/.snowclaw/config.toml");
         println!("    3. Chat:              zeroclaw agent -m \"Hello!\"");
         println!("    4. Gateway:           zeroclaw gateway");
     } else {
@@ -1527,7 +1527,7 @@ fn setup_workspace() -> Result<(PathBuf, PathBuf)> {
     let home = directories::UserDirs::new()
         .map(|u| u.home_dir().to_path_buf())
         .context("Could not find home directory")?;
-    let default_dir = home.join(".zeroclaw");
+    let default_dir = home.join(".snowclaw");
 
     print_bullet(&format!(
         "Default location: {}",
