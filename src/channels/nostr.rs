@@ -1327,7 +1327,7 @@ impl Channel for NostrChannel {
                                     sender: sender_name,
                                     reply_target: format!("#{}", group),
                                     content,
-                                    channel: format!("nostr:#{}", group),
+                                    channel: "nostr".to_string(),
                                     timestamp: event.created_at.as_secs(),
                                     thread_ts: None,
                                     
