@@ -1,0 +1,87 @@
+{
+  "_comment": "Shared test vectors for mention detection. Used by both snowclaw (Rust) and openclaw-nostr (TS).",
+  "botPubkey": "d29fe7c1af179eac10767f57ac021f520b44a8ded1fd37b1d1f79c9e545f96d7",
+  "botNpub": "npub162070sd0z702cyrk0at6cqsl2g95f2x7687n0vw377wfu4zljmts6fm8aw",
+  "botName": "clarity",
+  "vectors": [
+    {
+      "name": "p-tag mention",
+      "tags": [["p", "d29fe7c1af179eac10767f57ac021f520b44a8ded1fd37b1d1f79c9e545f96d7"]],
+      "text": "hey what do you think?",
+      "expect": { "mentioned": true, "pTag": true }
+    },
+    {
+      "name": "npub in text",
+      "tags": [],
+      "text": "asking nostr:npub162070sd0z702cyrk0at6cqsl2g95f2x7687n0vw377wfu4zljmts6fm8aw about this",
+      "expect": { "mentioned": true, "textBech32": true }
+    },
+    {
+      "name": "npub without nostr: prefix",
+      "tags": [],
+      "text": "hey npub162070sd0z702cyrk0at6cqsl2g95f2x7687n0vw377wfu4zljmts6fm8aw",
+      "expect": { "mentioned": true, "textBech32": true }
+    },
+    {
+      "name": "hex pubkey in text",
+      "tags": [],
+      "text": "d29fe7c1af179eac10767f57ac021f520b44a8ded1fd37b1d1f79c9e545f96d7 what do you think",
+      "expect": { "mentioned": true, "textHex": true }
+    },
+    {
+      "name": "bot name in text",
+      "tags": [],
+      "text": "clarity what's the weather like?",
+      "expect": { "mentioned": true, "name": true }
+    },
+    {
+      "name": "bot name case insensitive",
+      "tags": [],
+      "text": "Hey Clarity, check this out",
+      "expect": { "mentioned": true, "name": true }
+    },
+    {
+      "name": "@all broadcast",
+      "tags": [],
+      "text": "@all check this PR please",
+      "expect": { "mentioned": true, "broadcast": true }
+    },
+    {
+      "name": "@everyone broadcast",
+      "tags": [],
+      "text": "@everyone meeting in 5",
+      "expect": { "mentioned": true, "broadcast": true }
+    },
+    {
+      "name": "@ALL uppercase broadcast",
+      "tags": [],
+      "text": "@ALL heads up",
+      "expect": { "mentioned": true, "broadcast": true }
+    },
+    {
+      "name": "no mention at all",
+      "tags": [],
+      "text": "just chatting about random stuff",
+      "expect": { "mentioned": false }
+    },
+    {
+      "name": "wrong p-tag",
+      "tags": [["p", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]],
+      "text": "hey there",
+      "expect": { "mentioned": false }
+    },
+    {
+      "name": "partial name no match",
+      "tags": [],
+      "text": "need more clarityyyy in docs",
+      "expect": { "mentioned": true, "name": true },
+      "_note": "substring match — both impls currently match this. acceptable."
+    },
+    {
+      "name": "@all mid-sentence",
+      "tags": [],
+      "text": "hey can @all review this?",
+      "expect": { "mentioned": true, "broadcast": true }
+    }
+  ]
+}

@@ -1130,6 +1130,7 @@ impl GeminiProvider {
         let usage = result.usage_metadata.map(|u| TokenUsage {
             input_tokens: u.prompt_token_count,
             output_tokens: u.candidates_token_count,
+            ..Default::default()
         });
 
         let text = result

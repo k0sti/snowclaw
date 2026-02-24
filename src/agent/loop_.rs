@@ -48,6 +48,15 @@ use parsing::{
     parse_tool_calls, parse_tool_calls_from_json_value, tool_call_signature, ParsedToolCall,
 };
 
+/// Result of a tool call loop execution, including accumulated token usage.
+#[derive(Debug)]
+pub(crate) struct ToolLoopResult {
+    /// The final text response from the LLM.
+    pub text: String,
+    /// Accumulated token usage across all LLM calls in this loop.
+    pub accumulated_usage: Vec<crate::providers::TokenUsage>,
+}
+
 /// Minimum characters per chunk when relaying LLM text to a streaming draft.
 const STREAM_CHUNK_MIN_CHARS: usize = 80;
 
@@ -539,6 +548,7 @@ pub(crate) async fn agent_turn(
         &[],
     )
     .await
+    .map(|r| r.text)
 }
 
 /// Run the tool loop with channel reply_target context, used by channel runtimes
@@ -673,7 +683,7 @@ pub(crate) async fn run_tool_call_loop(
     on_delta: Option<tokio::sync::mpsc::Sender<String>>,
     hooks: Option<&crate::hooks::HookRunner>,
     excluded_tools: &[String],
-) -> Result<String> {
+) -> Result<ToolLoopResult> {
     let non_cli_approval_context = TOOL_LOOP_NON_CLI_APPROVAL_CONTEXT
         .try_with(Clone::clone)
         .ok()
@@ -693,6 +703,7 @@ pub(crate) async fn run_tool_call_loop(
     } else {
         max_tool_iterations
     };
+    let mut accumulated_usage: Vec<crate::providers::TokenUsage> = Vec::new();
 
     let tool_specs: Vec<crate::tools::ToolSpec> = tools_registry
         .iter()
@@ -810,6 +821,10 @@ pub(crate) async fn run_tool_call_loop(
                         .as_ref()
                         .map(|u| (u.input_tokens, u.output_tokens))
                         .unwrap_or((None, None));
+
+                    if let Some(ref usage) = resp.usage {
+                        accumulated_usage.push(usage.clone());
+                    }
 
                     observer.record_event(&ObserverEvent::LlmResponse {
                         provider: provider_name.to_string(),
@@ -996,7 +1011,10 @@ pub(crate) async fn run_tool_call_loop(
                 }
             }
             history.push(ChatMessage::assistant(response_text.clone()));
-            return Ok(display_text);
+            return Ok(ToolLoopResult {
+                text: display_text,
+                accumulated_usage,
+            });
         }
 
         // Print any text the LLM produced alongside tool calls (unless silent)
@@ -1746,7 +1764,7 @@ pub async fn run(
         None
     };
     let native_tools = provider.supports_native_tools();
-    let mut system_prompt = crate::channels::build_system_prompt_with_mode(
+    let (mut system_prompt, _prompt_breakdown) = crate::channels::build_system_prompt_with_mode(
         &config.workspace_dir,
         model_name,
         &tool_descs,
@@ -1824,7 +1842,8 @@ pub async fn run(
             None,
             &[],
         )
-        .await?;
+        .await?
+        .text;
         final_output = response.clone();
         println!("{response}");
         observer.record_event(&ObserverEvent::TurnComplete);
@@ -1951,7 +1970,7 @@ pub async fn run(
             )
             .await
             {
-                Ok(resp) => resp,
+                Ok(result) => result.text,
                 Err(e) => {
                     if is_tool_iteration_limit_error(&e) {
                         let pause_notice = format!(
@@ -2150,7 +2169,7 @@ pub async fn process_message(config: Config, message: &str) -> Result<String> {
         None
     };
     let native_tools = provider.supports_native_tools();
-    let mut system_prompt = crate::channels::build_system_prompt_with_mode(
+    let (mut system_prompt, _prompt_breakdown) = crate::channels::build_system_prompt_with_mode(
         &config.workspace_dir,
         &model_name,
         &tool_descs,
@@ -2662,7 +2681,7 @@ mod tests {
         .await
         .expect("valid multimodal payload should pass");
 
-        assert_eq!(result, "vision-ok");
+        assert_eq!(result.text, "vision-ok");
         assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
@@ -2788,7 +2807,7 @@ mod tests {
         .await
         .expect("parallel execution should complete");
 
-        assert_eq!(result, "done");
+        assert_eq!(result.text, "done");
         assert!(
             max_active.load(Ordering::SeqCst) >= 1,
             "tools should execute successfully"
@@ -3117,7 +3136,7 @@ mod tests {
         .await
         .expect("loop should finish after deduplicating repeated calls");
 
-        assert_eq!(result, "done");
+        assert_eq!(result.text, "done");
         assert_eq!(
             invocations.load(Ordering::SeqCst),
             1,
@@ -3173,7 +3192,7 @@ mod tests {
         .await
         .expect("native fallback id flow should complete");
 
-        assert_eq!(result, "done");
+        assert_eq!(result.text, "done");
         assert_eq!(invocations.load(Ordering::SeqCst), 1);
         assert!(
             history.iter().any(|msg| {
@@ -4600,7 +4619,7 @@ Let me check the result."#;
             ("file_read", "Read files"),
         ];
 
-        let system_prompt = build_system_prompt_with_mode(
+        let (system_prompt, _) = build_system_prompt_with_mode(
             std::path::Path::new("/tmp"),
             "test-model",
             &tool_summaries,

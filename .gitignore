@@ -36,3 +36,4 @@ credentials.json
 
 # Nix
 result
+.direnv/

@@ -534,3 +534,47 @@ When working in fast iterative mode:
 - Prefer deterministic behavior over clever shortcuts.
 - Do not “ship and hope” on security-sensitive paths.
 - If uncertain, leave a concrete TODO with verification context, not a hidden guess.
+
+## ⚠️ Production Config Safety
+
+**NEVER run `snowclaw daemon` directly during development.** The production config is at `~/.snowclaw/config.toml` and `config.save()` will overwrite it with defaults, wiping channel configurations (Telegram, Nostr).
+
+### Safe development testing:
+```bash
+# Use a separate config dir
+SNOWCLAW_HOME=/tmp/snowclaw-dev snowclaw daemon
+
+# Or stop the service first
+sudo systemctl stop snowclaw
+# ... test ...
+sudo systemctl start snowclaw
+```
+
+### If config gets wiped:
+```bash
+cp ~/.snowclaw/config.toml.backup ~/.snowclaw/config.toml
+sudo systemctl restart snowclaw
+```
+# Claude Code Rules for Snowclaw
+
+## FORBIDDEN — will break production:
+- **NEVER modify ~/.snowclaw/config.toml** — this is the LIVE runtime config with encrypted API keys
+- **NEVER modify any file outside ~/work/snowclaw/** unless explicitly asked
+- **NEVER modify ~/work/snowclaw/bridge.toml** — live bridge config
+- **NEVER create or modify .toml files in home directories**
+
+## Safe to modify:
+- Any file under ~/work/snowclaw/src/
+- ~/work/snowclaw/docs/
+- ~/work/snowclaw/tests/
+- ~/work/snowclaw/Cargo.toml (dependencies only if needed)
+
+## Build & Test:
+- `cargo check` after every change
+- `cargo test --lib` before declaring done
+- `cargo build --release` only when asked
+
+## Config handling:
+- Config schema is at src/config/schema.rs — modify THAT for new fields
+- Runtime config at ~/.snowclaw/ is managed by the user, not by you
+- If you need to test config changes, describe them — don't apply them

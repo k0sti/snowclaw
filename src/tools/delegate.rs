@@ -513,7 +513,8 @@ impl DelegateTool {
         .await;
 
         match result {
-            Ok(Ok(response)) => {
+            Ok(Ok(loop_result)) => {
+                let response = loop_result.text;
                 let rendered = if response.trim().is_empty() {
                     "[Empty response]".to_string()
                 } else {

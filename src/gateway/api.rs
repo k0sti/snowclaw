@@ -502,6 +502,88 @@ pub async fn handle_api_cost(
     }
 }
 
+/// Query parameters for /api/usage
+#[derive(Deserialize)]
+pub struct UsageQuery {
+    /// Time period: "day" or "month"
+    pub period: Option<String>,
+    /// Date for day period (YYYY-MM-DD), defaults to today
+    pub date: Option<String>,
+}
+
+/// GET /api/usage — usage breakdown with channel/room/model detail
+pub async fn handle_api_usage(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(params): Query<UsageQuery>,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+
+    let Some(ref tracker) = state.cost_tracker else {
+        return Json(serde_json::json!({
+            "error": "Cost tracking is not enabled"
+        }))
+        .into_response();
+    };
+
+    let date = if let Some(ref date_str) = params.date {
+        match chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
+            Ok(d) => d,
+            Err(_) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({"error": "Invalid date format. Use YYYY-MM-DD"})),
+                )
+                    .into_response();
+            }
+        }
+    } else {
+        chrono::Utc::now().date_naive()
+    };
+
+    match tracker.get_usage_breakdown(date) {
+        Ok(breakdown) => Json(serde_json::json!({
+            "date": date.to_string(),
+            "period": params.period.as_deref().unwrap_or("day"),
+            "usage": breakdown,
+        }))
+        .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("Usage breakdown failed: {e}")})),
+        )
+            .into_response(),
+    }
+}
+
+/// GET /api/usage/rooms — per-room usage summaries
+pub async fn handle_api_usage_rooms(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+
+    let Some(ref tracker) = state.cost_tracker else {
+        return Json(serde_json::json!({
+            "error": "Cost tracking is not enabled"
+        }))
+        .into_response();
+    };
+
+    match tracker.get_room_summaries() {
+        Ok(channels) => Json(serde_json::json!({"channels": channels})).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("Room summaries failed: {e}")})),
+        )
+            .into_response(),
+    }
+}
+
 /// GET /api/cli-tools — discovered CLI tools
 pub async fn handle_api_cli_tools(
     State(state): State<AppState>,
@@ -683,7 +765,7 @@ fn mask_sensitive_fields(config: &crate::config::Config) -> crate::config::Confi
         mask_required_secret(&mut qq.app_secret);
     }
     if let Some(nostr) = masked.channels_config.nostr.as_mut() {
-        mask_required_secret(&mut nostr.private_key);
+        mask_optional_secret(&mut nostr.nsec);
     }
     if let Some(clawdtalk) = masked.channels_config.clawdtalk.as_mut() {
         mask_required_secret(&mut clawdtalk.api_key);
@@ -864,7 +946,7 @@ fn restore_masked_sensitive_fields(
         incoming.channels_config.nostr.as_mut(),
         current.channels_config.nostr.as_ref(),
     ) {
-        restore_required_secret(&mut incoming_ch.private_key, &current_ch.private_key);
+        restore_optional_secret(&mut incoming_ch.nsec, &current_ch.nsec);
     }
     if let (Some(incoming_ch), Some(current_ch)) = (
         incoming.channels_config.clawdtalk.as_mut(),

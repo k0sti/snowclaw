@@ -5,6 +5,7 @@ pub enum MemoryBackendKind {
     Postgres,
     Qdrant,
     Markdown,
+    Nostr,
     None,
     Unknown,
 }
@@ -62,6 +63,15 @@ const QDRANT_PROFILE: MemoryBackendProfile = MemoryBackendProfile {
     auto_save_default: true,
     uses_sqlite_hygiene: false,
     sqlite_based: false,
+    optional_dependency: true,
+};
+
+const NOSTR_PROFILE: MemoryBackendProfile = MemoryBackendProfile {
+    key: "nostr",
+    label: "Nostr — NIP-78 relay storage with local SQLite semantic search",
+    auto_save_default: true,
+    uses_sqlite_hygiene: false,
+    sqlite_based: false,
     optional_dependency: false,
 };
 
@@ -105,6 +115,7 @@ pub fn classify_memory_backend(backend: &str) -> MemoryBackendKind {
         "postgres" => MemoryBackendKind::Postgres,
         "qdrant" => MemoryBackendKind::Qdrant,
         "markdown" => MemoryBackendKind::Markdown,
+        "nostr" => MemoryBackendKind::Nostr,
         "none" => MemoryBackendKind::None,
         _ => MemoryBackendKind::Unknown,
     }
@@ -117,6 +128,7 @@ pub fn memory_backend_profile(backend: &str) -> MemoryBackendProfile {
         MemoryBackendKind::Postgres => POSTGRES_PROFILE,
         MemoryBackendKind::Qdrant => QDRANT_PROFILE,
         MemoryBackendKind::Markdown => MARKDOWN_PROFILE,
+        MemoryBackendKind::Nostr => NOSTR_PROFILE,
         MemoryBackendKind::None => NONE_PROFILE,
         MemoryBackendKind::Unknown => CUSTOM_PROFILE,
     }

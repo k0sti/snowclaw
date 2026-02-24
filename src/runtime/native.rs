@@ -29,8 +29,8 @@ impl RuntimeAdapter for NativeRuntime {
 
     fn storage_path(&self) -> PathBuf {
         directories::UserDirs::new().map_or_else(
-            || PathBuf::from(".zeroclaw"),
-            |u| u.home_dir().join(".zeroclaw"),
+            || PathBuf::from(crate::config::APP_DIR_NAME),
+            |u| u.home_dir().join(crate::config::APP_DIR_NAME),
         )
     }
 

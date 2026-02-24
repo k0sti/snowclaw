@@ -222,7 +222,7 @@ pub async fn run_models(
     for provider_name in &targets {
         println!("  [{}]", provider_name);
 
-        match crate::onboard::run_models_refresh(config, Some(provider_name), !use_cache).await {
+        match crate::onboard::run_models_refresh(config, Some(provider_name), !use_cache) {
             Ok(()) => {
                 ok_count += 1;
                 println!("    ✅ model catalog check passed");
@@ -760,7 +760,7 @@ fn workspace_probe_path(workspace_dir: &Path) -> std::path::PathBuf {
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |duration| duration.as_nanos());
     workspace_dir.join(format!(
-        ".zeroclaw_doctor_probe_{}_{}",
+        ".snowclaw_doctor_probe_{}_{}",
         std::process::id(),
         nanos
     ))
@@ -1264,7 +1264,7 @@ mod tests {
         assert!(first
             .file_name()
             .and_then(|name| name.to_str())
-            .is_some_and(|name| name.starts_with(".zeroclaw_doctor_probe_")));
+            .is_some_and(|name| name.starts_with(".snowclaw_doctor_probe_")));
     }
 
     #[test]

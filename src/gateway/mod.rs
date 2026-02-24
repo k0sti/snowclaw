@@ -754,6 +754,8 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
         .route("/api/memory", post(api::handle_api_memory_store))
         .route("/api/memory/{key}", delete(api::handle_api_memory_delete))
         .route("/api/cost", get(api::handle_api_cost))
+        .route("/api/usage", get(api::handle_api_usage))
+        .route("/api/usage/rooms", get(api::handle_api_usage_rooms))
         .route("/api/cli-tools", get(api::handle_api_cli_tools))
         .route("/api/health", get(api::handle_api_health))
         .route("/api/node-control", post(handle_node_control))

@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/robot-kit"]
+members = [".", "crates/robot-kit", "crates/nostr-core", "crates/bridge"]
 resolver = "2"
 
 [package]
@@ -14,6 +14,10 @@ readme = "README.md"
 keywords = ["ai", "agent", "cli", "assistant", "chatbot"]
 categories = ["command-line-utilities", "api-bindings"]
 rust-version = "1.87"
+
+[[bin]]
+name = "snowclaw"
+path = "src/main.rs"
 
 [dependencies]
 # CLI - minimal and fast
@@ -112,6 +116,10 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 chrono-tz = "0.10"
 cron = "0.15"
 
+# Terminal UI (stats --live dashboard)
+ratatui = "0.29"
+crossterm = "0.28"
+
 # Interactive CLI prompts
 dialoguer = { version = "0.12", features = ["fuzzy-select"] }
 rustyline = "17.0"
@@ -123,13 +131,16 @@ glob = "0.3"
 # Binary discovery (init system detection)
 which = "8.0"
 
-# Temporary directory creation (for self-update)
-tempfile = "3.14"
+# LRU cache
+lru = "0.12"
+
+# Nostr protocol
+nostr-core = { path = "crates/nostr-core" }
 
 # WebSocket client channels (Discord/Lark/DingTalk/Nostr)
 tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink"] }
-nostr-sdk = { version = "0.44", default-features = false, features = ["nip04", "nip59"] }
+nostr-sdk = { version = "0.44", default-features = false, features = ["nip04", "nip44", "nip59"] }
 regex = "1.10"
 hostname = "0.4.2"
 rustls = "0.23"

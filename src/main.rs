@@ -80,8 +80,12 @@ mod providers;
 mod runtime;
 mod security;
 mod service;
+mod stats;
+mod memory_cli;
 mod skillforge;
+mod mcp;
 mod skills;
+mod task_cli;
 mod tools;
 mod tunnel;
 mod update;
@@ -325,6 +329,46 @@ Examples:
         force: bool,
     },
 
+    /// Show token usage statistics and cost analytics
+    #[command(long_about = "\
+Show token usage statistics and cost analytics.
+
+Reads the costs.jsonl ledger and displays aggregated token usage, \
+cost breakdowns by channel/room, and token category analysis.
+
+Defaults to today's data. Use --date, --period, or --live for \
+different views.
+
+Examples:
+  snowclaw stats                          # today's stats
+  snowclaw stats --date 2026-02-20        # specific date
+  snowclaw stats --period week            # last 7 days
+  snowclaw stats --period month           # this month
+  snowclaw stats --room techteam          # filter by room
+  snowclaw stats --json                   # JSON output
+  snowclaw stats --live                   # real-time TUI dashboard")]
+    Stats {
+        /// Show specific date (YYYY-MM-DD)
+        #[arg(long)]
+        date: Option<String>,
+
+        /// Aggregation period: day, week, month
+        #[arg(long)]
+        period: Option<String>,
+
+        /// Filter to a specific room name
+        #[arg(long)]
+        room: Option<String>,
+
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+
+        /// Launch real-time TUI dashboard
+        #[arg(long)]
+        live: bool,
+    },
+
     /// Engage, inspect, and resume emergency-stop states.
     ///
     /// Examples:
@@ -417,6 +461,24 @@ Examples:
     Skills {
         #[command(subcommand)]
         skill_command: SkillCommands,
+    },
+
+    /// Manage Nostr-native tasks (create, list, status, update)
+    #[command(long_about = "\
+Manage Nostr-native tasks.
+
+Create, list, inspect, and update tasks using Nostr event kinds \
+(1621 for tasks, 1630-1637 for status transitions).
+
+Examples:
+  snowclaw task create 'Deploy v2'
+  snowclaw task list
+  snowclaw task list --status executing
+  snowclaw task status task-1234567890
+  snowclaw task update task-1234567890 --status done")]
+    Task {
+        #[command(subcommand)]
+        task_command: task_cli::TaskCommands,
     },
 
     /// Migrate data from other agent runtimes
@@ -800,7 +862,7 @@ async fn main() -> Result<()> {
         let config = if channels_only {
             onboard::run_channels_repair_wizard().await
         } else if interactive {
-            onboard::run_wizard(force).await
+            onboard::run_wizard().await
         } else {
             onboard::run_quick_setup(
                 api_key.as_deref(),
@@ -1021,6 +1083,29 @@ async fn main() -> Result<()> {
             Ok(())
         }
 
+        Commands::Stats {
+            date,
+            period,
+            room,
+            json,
+            live,
+        } => {
+            if live {
+                return stats::tui::run(&config.workspace_dir);
+            }
+            let jsonl_path = stats::costs_jsonl_path(&config.workspace_dir);
+            let records = stats::read_records(&jsonl_path)?;
+            let filter =
+                stats::build_filter(date.as_deref(), period.as_deref(), room)?;
+            let result = stats::aggregate(&records, &filter);
+            if json {
+                stats::print_stats_json(&result)?;
+            } else {
+                stats::print_stats(&result);
+            }
+            Ok(())
+        }
+
         Commands::Estop {
             estop_command,
             level,
@@ -1042,7 +1127,7 @@ async fn main() -> Result<()> {
                     }
                     onboard::run_models_refresh_all(&config, force).await
                 } else {
-                    onboard::run_models_refresh(&config, provider.as_deref(), force).await
+                    onboard::run_models_refresh(&config, provider.as_deref(), force)
                 }
             }
             ModelCommands::List { provider } => {
@@ -1124,6 +1209,8 @@ async fn main() -> Result<()> {
         } => integrations::handle_command(integration_command, &config),
 
         Commands::Skills { skill_command } => skills::handle_command(skill_command, &config),
+
+        Commands::Task { task_command } => task_cli::handle_command(task_command, &config),
 
         Commands::Migrate { migrate_command } => {
             migration::handle_command(migrate_command, &config).await

@@ -65,6 +65,7 @@ pub struct BrowserTool {
     allowed_domains: Vec<String>,
     session_name: Option<String>,
     backend: String,
+    pinchtab_url: String,
     native_headless: bool,
     native_webdriver_url: String,
     native_chrome_path: Option<String>,
@@ -78,6 +79,7 @@ enum BrowserBackendKind {
     AgentBrowser,
     RustNative,
     ComputerUse,
+    Pinchtab,
     Auto,
 }
 
@@ -86,6 +88,7 @@ enum ResolvedBackend {
     AgentBrowser,
     RustNative,
     ComputerUse,
+    Pinchtab,
 }
 
 impl BrowserBackendKind {
@@ -95,9 +98,10 @@ impl BrowserBackendKind {
             "agent_browser" | "agentbrowser" => Ok(Self::AgentBrowser),
             "rust_native" | "native" => Ok(Self::RustNative),
             "computer_use" | "computeruse" => Ok(Self::ComputerUse),
+            "pinchtab" => Ok(Self::Pinchtab),
             "auto" => Ok(Self::Auto),
             _ => anyhow::bail!(
-                "Unsupported browser backend '{raw}'. Use 'agent_browser', 'rust_native', 'computer_use', or 'auto'"
+                "Unsupported browser backend '{raw}'. Use 'agent_browser', 'rust_native', 'computer_use', 'pinchtab', or 'auto'"
             ),
         }
     }
@@ -107,6 +111,7 @@ impl BrowserBackendKind {
             Self::AgentBrowser => "agent_browser",
             Self::RustNative => "rust_native",
             Self::ComputerUse => "computer_use",
+            Self::Pinchtab => "pinchtab",
             Self::Auto => "auto",
         }
     }
@@ -209,6 +214,7 @@ impl BrowserTool {
             allowed_domains,
             session_name,
             "agent_browser".into(),
+            "http://127.0.0.1:9867".into(),
             true,
             "http://127.0.0.1:9515".into(),
             None,
@@ -222,6 +228,7 @@ impl BrowserTool {
         allowed_domains: Vec<String>,
         session_name: Option<String>,
         backend: String,
+        pinchtab_url: String,
         native_headless: bool,
         native_webdriver_url: String,
         native_chrome_path: Option<String>,
@@ -232,6 +239,7 @@ impl BrowserTool {
             allowed_domains: normalize_domains(allowed_domains),
             session_name,
             backend,
+            pinchtab_url,
             native_headless,
             native_webdriver_url,
             native_chrome_path,
@@ -327,6 +335,358 @@ impl BrowserTool {
         Ok(endpoint_reachable(&endpoint, Duration::from_millis(500)))
     }
 
+    fn pinchtab_available(&self) -> bool {
+        let url = self.pinchtab_url.trim();
+        if url.is_empty() {
+            return false;
+        }
+        match reqwest::Url::parse(url) {
+            Ok(parsed) => endpoint_reachable(&parsed, Duration::from_millis(500)),
+            Err(_) => false,
+        }
+    }
+
+    /// Get the first open tab ID from Pinchtab.
+    async fn pinchtab_first_tab(
+        client: &reqwest::Client,
+        base: &str,
+    ) -> anyhow::Result<String> {
+        let resp = client
+            .get(format!("{base}/tabs"))
+            .send()
+            .await
+            .context("Pinchtab /tabs request failed")?;
+        let body: Value = resp.json().await.context("Pinchtab /tabs: invalid JSON")?;
+        body.get("tabs")
+            .and_then(|t| t.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|t| t.get("id"))
+            .and_then(|id| id.as_str())
+            .map(String::from)
+            .ok_or_else(|| anyhow::anyhow!("Pinchtab: no open tabs"))
+    }
+
+    /// Execute a browser action via the Pinchtab HTTP API.
+    async fn execute_pinchtab_action(
+        &self,
+        action: BrowserAction,
+    ) -> anyhow::Result<ToolResult> {
+        let base = self.pinchtab_url.trim_end_matches('/');
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()
+            .context("Failed to create HTTP client for Pinchtab")?;
+
+        match action {
+            BrowserAction::Open { url } => {
+                self.validate_url(&url)?;
+                let tab_id = Self::pinchtab_first_tab(&client, base).await.ok();
+                let mut body = json!({"url": url});
+                if let Some(id) = tab_id {
+                    body["tabId"] = json!(id);
+                }
+                let resp = client
+                    .post(format!("{base}/navigate"))
+                    .json(&body)
+                    .send()
+                    .await
+                    .context("Pinchtab /navigate request failed")?;
+                let data: Value = resp.json().await.context("Pinchtab /navigate: invalid JSON")?;
+                Ok(ToolResult {
+                    success: true,
+                    output: serde_json::to_string_pretty(&json!({
+                        "backend": "pinchtab",
+                        "action": "open",
+                        "title": data.get("title"),
+                        "url": data.get("url"),
+                    }))?,
+                    error: None,
+                })
+            }
+
+            BrowserAction::Snapshot {
+                interactive_only,
+                compact,
+                depth,
+            } => {
+                let tab_id = Self::pinchtab_first_tab(&client, base).await?;
+                let mut url = format!("{base}/snapshot?tabId={tab_id}");
+                if interactive_only {
+                    url.push_str("&filter=interactive");
+                }
+                if compact {
+                    url.push_str("&format=compact");
+                }
+                if let Some(d) = depth {
+                    url.push_str(&format!("&depth={d}"));
+                }
+                let resp = client
+                    .get(&url)
+                    .send()
+                    .await
+                    .context("Pinchtab /snapshot request failed")?;
+                let text = resp.text().await.context("Pinchtab /snapshot: read failed")?;
+                Ok(ToolResult {
+                    success: true,
+                    output: text,
+                    error: None,
+                })
+            }
+
+            BrowserAction::Click { selector } => {
+                let tab_id = Self::pinchtab_first_tab(&client, base).await?;
+                let ref_id = pinchtab_ref_from_selector(&selector);
+                let body = json!({"tabId": tab_id, "kind": "click", "ref": ref_id});
+                let resp = client
+                    .post(format!("{base}/action"))
+                    .json(&body)
+                    .send()
+                    .await
+                    .context("Pinchtab /action click failed")?;
+                let data: Value = resp.json().await.unwrap_or(json!({}));
+                Ok(ToolResult {
+                    success: true,
+                    output: serde_json::to_string_pretty(&json!({
+                        "backend": "pinchtab",
+                        "action": "click",
+                        "ref": ref_id,
+                        "data": data,
+                    }))?,
+                    error: None,
+                })
+            }
+
+            BrowserAction::Fill { selector, value } => {
+                let tab_id = Self::pinchtab_first_tab(&client, base).await?;
+                let ref_id = pinchtab_ref_from_selector(&selector);
+                let body = json!({"tabId": tab_id, "kind": "fill", "ref": ref_id, "text": value});
+                let resp = client
+                    .post(format!("{base}/action"))
+                    .json(&body)
+                    .send()
+                    .await
+                    .context("Pinchtab /action fill failed")?;
+                let data: Value = resp.json().await.unwrap_or(json!({}));
+                Ok(ToolResult {
+                    success: true,
+                    output: serde_json::to_string_pretty(&json!({
+                        "backend": "pinchtab",
+                        "action": "fill",
+                        "ref": ref_id,
+                        "data": data,
+                    }))?,
+                    error: None,
+                })
+            }
+
+            BrowserAction::Type { selector, text } => {
+                let tab_id = Self::pinchtab_first_tab(&client, base).await?;
+                let ref_id = pinchtab_ref_from_selector(&selector);
+                let body = json!({"tabId": tab_id, "kind": "type", "ref": ref_id, "text": text});
+                let resp = client
+                    .post(format!("{base}/action"))
+                    .json(&body)
+                    .send()
+                    .await
+                    .context("Pinchtab /action type failed")?;
+                let data: Value = resp.json().await.unwrap_or(json!({}));
+                Ok(ToolResult {
+                    success: true,
+                    output: serde_json::to_string_pretty(&json!({
+                        "backend": "pinchtab",
+                        "action": "type",
+                        "ref": ref_id,
+                        "data": data,
+                    }))?,
+                    error: None,
+                })
+            }
+
+            BrowserAction::GetText { selector: _ } => {
+                let tab_id = Self::pinchtab_first_tab(&client, base).await?;
+                let resp = client
+                    .get(format!("{base}/text?tabId={tab_id}"))
+                    .send()
+                    .await
+                    .context("Pinchtab /text request failed")?;
+                let data: Value = resp.json().await.context("Pinchtab /text: invalid JSON")?;
+                Ok(ToolResult {
+                    success: true,
+                    output: serde_json::to_string_pretty(&json!({
+                        "backend": "pinchtab",
+                        "action": "get_text",
+                        "title": data.get("title"),
+                        "url": data.get("url"),
+                        "text": data.get("text"),
+                    }))?,
+                    error: None,
+                })
+            }
+
+            BrowserAction::GetTitle => {
+                let tab_id = Self::pinchtab_first_tab(&client, base).await?;
+                let resp = client
+                    .get(format!("{base}/text?tabId={tab_id}"))
+                    .send()
+                    .await
+                    .context("Pinchtab /text request failed")?;
+                let data: Value = resp.json().await.context("Pinchtab /text: invalid JSON")?;
+                let title = data
+                    .get("title")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                Ok(ToolResult {
+                    success: true,
+                    output: title.to_string(),
+                    error: None,
+                })
+            }
+
+            BrowserAction::GetUrl => {
+                let tab_id = Self::pinchtab_first_tab(&client, base).await?;
+                let resp = client
+                    .get(format!("{base}/text?tabId={tab_id}"))
+                    .send()
+                    .await
+                    .context("Pinchtab /text request failed")?;
+                let data: Value = resp.json().await.context("Pinchtab /text: invalid JSON")?;
+                let url = data
+                    .get("url")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                Ok(ToolResult {
+                    success: true,
+                    output: url.to_string(),
+                    error: None,
+                })
+            }
+
+            BrowserAction::Screenshot { path: _, full_page: _ } => {
+                let tab_id = Self::pinchtab_first_tab(&client, base).await?;
+                let resp = client
+                    .get(format!("{base}/screenshot?tabId={tab_id}"))
+                    .send()
+                    .await
+                    .context("Pinchtab /screenshot request failed")?;
+                let bytes = resp.bytes().await.context("Pinchtab /screenshot: read failed")?;
+                use base64::Engine;
+                let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                Ok(ToolResult {
+                    success: true,
+                    output: format!("data:image/jpeg;base64,{b64}"),
+                    error: None,
+                })
+            }
+
+            BrowserAction::Press { key } => {
+                let tab_id = Self::pinchtab_first_tab(&client, base).await?;
+                let body = json!({"tabId": tab_id, "kind": "press", "key": key});
+                let resp = client
+                    .post(format!("{base}/action"))
+                    .json(&body)
+                    .send()
+                    .await
+                    .context("Pinchtab /action press failed")?;
+                let data: Value = resp.json().await.unwrap_or(json!({}));
+                Ok(ToolResult {
+                    success: true,
+                    output: serde_json::to_string_pretty(&json!({
+                        "backend": "pinchtab",
+                        "action": "press",
+                        "key": key,
+                        "data": data,
+                    }))?,
+                    error: None,
+                })
+            }
+
+            BrowserAction::Hover { selector } => {
+                let tab_id = Self::pinchtab_first_tab(&client, base).await?;
+                let ref_id = pinchtab_ref_from_selector(&selector);
+                let body = json!({"tabId": tab_id, "kind": "hover", "ref": ref_id});
+                let resp = client
+                    .post(format!("{base}/action"))
+                    .json(&body)
+                    .send()
+                    .await
+                    .context("Pinchtab /action hover failed")?;
+                let data: Value = resp.json().await.unwrap_or(json!({}));
+                Ok(ToolResult {
+                    success: true,
+                    output: serde_json::to_string_pretty(&json!({
+                        "backend": "pinchtab",
+                        "action": "hover",
+                        "ref": ref_id,
+                        "data": data,
+                    }))?,
+                    error: None,
+                })
+            }
+
+            BrowserAction::Scroll { direction, pixels } => {
+                let tab_id = Self::pinchtab_first_tab(&client, base).await?;
+                let amount = pixels.unwrap_or(3);
+                let body = json!({"tabId": tab_id, "kind": "scroll", "direction": direction, "amount": amount});
+                let resp = client
+                    .post(format!("{base}/action"))
+                    .json(&body)
+                    .send()
+                    .await
+                    .context("Pinchtab /action scroll failed")?;
+                let data: Value = resp.json().await.unwrap_or(json!({}));
+                Ok(ToolResult {
+                    success: true,
+                    output: serde_json::to_string_pretty(&json!({
+                        "backend": "pinchtab",
+                        "action": "scroll",
+                        "direction": direction,
+                        "data": data,
+                    }))?,
+                    error: None,
+                })
+            }
+
+            BrowserAction::Wait { selector: _, ms, text: _ } => {
+                if let Some(millis) = ms {
+                    tokio::time::sleep(Duration::from_millis(millis)).await;
+                }
+                Ok(ToolResult {
+                    success: true,
+                    output: json!({"backend": "pinchtab", "action": "wait"}).to_string(),
+                    error: None,
+                })
+            }
+
+            BrowserAction::Close => {
+                // Close first tab
+                if let Ok(tab_id) = Self::pinchtab_first_tab(&client, base).await {
+                    let body = json!({"action": "close", "tabId": tab_id});
+                    let _ = client
+                        .post(format!("{base}/tab"))
+                        .json(&body)
+                        .send()
+                        .await;
+                }
+                Ok(ToolResult {
+                    success: true,
+                    output: json!({"backend": "pinchtab", "action": "close"}).to_string(),
+                    error: None,
+                })
+            }
+
+            BrowserAction::IsVisible { selector: _ } | BrowserAction::Find { .. } => {
+                Ok(ToolResult {
+                    success: false,
+                    output: String::new(),
+                    error: Some(unavailable_action_for_backend_error(
+                        "is_visible/find",
+                        ResolvedBackend::Pinchtab,
+                    )),
+                })
+            }
+        }
+    }
+
     async fn resolve_backend(&self) -> anyhow::Result<ResolvedBackend> {
         let configured = self.configured_backend()?;
 
@@ -362,12 +722,24 @@ impl BrowserTool {
                 }
                 Ok(ResolvedBackend::ComputerUse)
             }
+            BrowserBackendKind::Pinchtab => {
+                if !self.pinchtab_available() {
+                    anyhow::bail!(
+                        "browser.backend='pinchtab' but Pinchtab is unreachable at {}. Start Pinchtab or check browser.pinchtab_url",
+                        self.pinchtab_url
+                    );
+                }
+                Ok(ResolvedBackend::Pinchtab)
+            }
             BrowserBackendKind::Auto => {
                 if Self::rust_native_compiled() && self.rust_native_available() {
                     return Ok(ResolvedBackend::RustNative);
                 }
                 if Self::is_agent_browser_available().await {
                     return Ok(ResolvedBackend::AgentBrowser);
+                }
+                if self.pinchtab_available() {
+                    return Ok(ResolvedBackend::Pinchtab);
                 }
 
                 let computer_use_err = match self.computer_use_available() {
@@ -970,6 +1342,7 @@ impl BrowserTool {
         match backend {
             ResolvedBackend::AgentBrowser => self.execute_agent_browser_action(action).await,
             ResolvedBackend::RustNative => self.execute_rust_native_action(action).await,
+            ResolvedBackend::Pinchtab => self.execute_pinchtab_action(action).await,
             ResolvedBackend::ComputerUse => anyhow::bail!(
                 "Internal error: computer_use backend must be handled before BrowserAction parsing"
             ),
@@ -1006,10 +1379,12 @@ impl Tool for BrowserTool {
 
     fn description(&self) -> &str {
         concat!(
-            "Web/browser automation with pluggable backends (agent-browser, rust-native, computer_use). ",
+            "Web/browser automation with pluggable backends (agent-browser, rust-native, computer_use, pinchtab). ",
             "Supports DOM actions plus optional OS-level actions (mouse_move, mouse_click, mouse_drag, ",
-            "key_type, key_press, screen_capture) through a computer-use sidecar. Use 'snapshot' to map ",
-            "interactive elements to refs (@e1, @e2). Enforces browser.allowed_domains for open actions."
+            "key_type, key_press, screen_capture) through a computer-use sidecar. Pinchtab backend uses ",
+            "accessibility-first HTTP API: 'snapshot' returns refs (e1, e2...) for click/type/fill actions. ",
+            "Use 'get_text' with Pinchtab for token-efficient page reading (~800 tokens). ",
+            "Enforces browser.allowed_domains for open actions."
         )
     }
 
@@ -2246,6 +2621,7 @@ fn backend_name(backend: ResolvedBackend) -> &'static str {
         ResolvedBackend::AgentBrowser => "agent_browser",
         ResolvedBackend::RustNative => "rust_native",
         ResolvedBackend::ComputerUse => "computer_use",
+        ResolvedBackend::Pinchtab => "pinchtab",
     }
 }
 
@@ -2269,6 +2645,13 @@ fn is_recoverable_rust_native_error(err: &anyhow::Error) -> bool {
     }
 
     message.contains("webdriver") && (message.contains("timed out") || message.contains("timeout"))
+}
+
+/// Convert a selector like "@e5" or "e5" to a Pinchtab ref string.
+/// If the selector doesn't look like a ref, return it as-is (Pinchtab
+/// may support CSS selectors in the future).
+fn pinchtab_ref_from_selector(selector: &str) -> &str {
+    selector.strip_prefix('@').unwrap_or(selector)
 }
 
 fn normalize_domains(domains: Vec<String>) -> Vec<String> {
@@ -2589,6 +2972,7 @@ mod tests {
             vec!["example.com".into()],
             None,
             "auto".into(),
+            "http://127.0.0.1:9867".into(),
             true,
             "http://127.0.0.1:9515".into(),
             None,
@@ -2605,6 +2989,7 @@ mod tests {
             vec!["example.com".into()],
             None,
             "computer_use".into(),
+            "http://127.0.0.1:9867".into(),
             true,
             "http://127.0.0.1:9515".into(),
             None,
@@ -2624,6 +3009,7 @@ mod tests {
             vec!["example.com".into()],
             None,
             "computer_use".into(),
+            "http://127.0.0.1:9867".into(),
             true,
             "http://127.0.0.1:9515".into(),
             None,
@@ -2644,6 +3030,7 @@ mod tests {
             vec!["example.com".into()],
             None,
             "computer_use".into(),
+            "http://127.0.0.1:9867".into(),
             true,
             "http://127.0.0.1:9515".into(),
             None,
@@ -2665,6 +3052,7 @@ mod tests {
             vec!["example.com".into()],
             None,
             "computer_use".into(),
+            "http://127.0.0.1:9867".into(),
             true,
             "http://127.0.0.1:9515".into(),
             None,
@@ -2834,5 +3222,46 @@ mod tests {
             state.reset_session().await;
             state.reset_session().await;
         });
+    }
+
+    #[test]
+    fn browser_backend_parser_accepts_pinchtab() {
+        assert_eq!(
+            BrowserBackendKind::parse("pinchtab").unwrap(),
+            BrowserBackendKind::Pinchtab
+        );
+    }
+
+    #[test]
+    fn browser_tool_accepts_pinchtab_backend_config() {
+        let security = Arc::new(SecurityPolicy::default());
+        let tool = BrowserTool::new_with_backend(
+            security,
+            vec!["example.com".into()],
+            None,
+            "pinchtab".into(),
+            "http://127.0.0.1:9867".into(),
+            true,
+            "http://127.0.0.1:9515".into(),
+            None,
+            ComputerUseConfig::default(),
+        );
+        assert_eq!(
+            tool.configured_backend().unwrap(),
+            BrowserBackendKind::Pinchtab
+        );
+        assert_eq!(tool.pinchtab_url, "http://127.0.0.1:9867");
+    }
+
+    #[test]
+    fn pinchtab_ref_from_selector_strips_at_prefix() {
+        assert_eq!(pinchtab_ref_from_selector("@e5"), "e5");
+        assert_eq!(pinchtab_ref_from_selector("e5"), "e5");
+        assert_eq!(pinchtab_ref_from_selector("@e12"), "e12");
+    }
+
+    #[test]
+    fn pinchtab_backend_name_is_correct() {
+        assert_eq!(backend_name(ResolvedBackend::Pinchtab), "pinchtab");
     }
 }

@@ -375,9 +375,29 @@ fn parse_path_only_attachment(message: &str) -> Option<TelegramAttachment> {
     })
 }
 
-/// Delegate to the shared `strip_tool_call_tags` in the parent module.
-fn strip_tool_call_tags(message: &str) -> String {
-    super::strip_tool_call_tags(message)
+/// Strip XML-like tool call tags and their contents from LLM output.
+///
+/// Handles `<tool>`, `<toolcall>`, `<tool-call>`, `<tool_call>`, `<invoke>`,
+/// and `<arg_value>` tags (with or without matching close tags). Cleans up
+/// excess blank lines left behind.
+pub fn strip_tool_call_tags(message: &str) -> String {
+    use regex::Regex;
+    use std::sync::LazyLock;
+
+    static CLOSED_TAG_RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?s)<(tool|toolcall|tool-call|tool_call|invoke)>.*?</(tool|toolcall|tool-call|tool_call|invoke|arg_value)>").unwrap()
+    });
+    static UNCLOSED_TAG_RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?s)<(tool|toolcall|tool-call|tool_call|invoke)>\s*\{.*").unwrap()
+    });
+    static EXCESS_NEWLINES_RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"\n{3,}").unwrap()
+    });
+
+    let result = CLOSED_TAG_RE.replace_all(message, "");
+    let result = UNCLOSED_TAG_RE.replace_all(&result, "");
+    let result = EXCESS_NEWLINES_RE.replace_all(&result, "\n\n");
+    result.trim_end_matches('\n').to_string()
 }
 
 fn find_matching_close(s: &str) -> Option<usize> {

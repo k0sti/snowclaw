@@ -15,8 +15,8 @@
 //! # Configuration
 //!
 //! ```toml
-//! [channels_config.whatsapp]
-//! session_path = "~/.zeroclaw/whatsapp-session.db"  # Required for Web mode
+//! [channels.whatsapp]
+//! session_path = "~/.snowclaw/whatsapp-session.db"  # Required for Web mode
 //! pair_phone = "15551234567"  # Optional: for pair code linking
 //! allowed_numbers = ["+1234567890", "*"]  # Same as Cloud API
 //! ```
@@ -164,8 +164,8 @@ fn mime_from_path(path: &std::path::Path) -> &'static str {
 /// # Configuration
 ///
 /// ```toml
-/// [channels_config.whatsapp]
-/// session_path = "~/.zeroclaw/whatsapp-session.db"
+/// [channels.whatsapp]
+/// session_path = "~/.snowclaw/whatsapp-session.db"
 /// pair_phone = "15551234567"  # Optional
 /// allowed_numbers = ["+1234567890", "*"]
 /// ```

@@ -120,8 +120,8 @@ impl OpenAiCodexProvider {
 
 fn default_zeroclaw_dir() -> PathBuf {
     directories::UserDirs::new().map_or_else(
-        || PathBuf::from(".zeroclaw"),
-        |dirs| dirs.home_dir().join(".zeroclaw"),
+        || PathBuf::from(crate::config::APP_DIR_NAME),
+        |dirs| dirs.home_dir().join(crate::config::APP_DIR_NAME),
     )
 }
 

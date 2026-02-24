@@ -60,6 +60,7 @@ pub(crate) mod identity;
 #[allow(unused_imports)]
 pub(crate) mod plugins;
 pub(crate) mod integrations;
+pub mod mcp;
 pub mod memory;
 pub(crate) mod migration;
 pub(crate) mod multimodal;
@@ -72,6 +73,7 @@ pub mod runtime;
 pub(crate) mod security;
 pub(crate) mod service;
 pub(crate) mod skills;
+pub(crate) mod stats;
 pub mod tools;
 pub(crate) mod tunnel;
 pub mod update;

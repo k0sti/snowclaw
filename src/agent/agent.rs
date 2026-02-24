@@ -279,7 +279,7 @@ impl Agent {
             None
         };
 
-        let tools = tools::all_tools_with_runtime(
+        let mut tools = tools::all_tools_with_runtime(
             Arc::new(config.clone()),
             &security,
             runtime,
@@ -294,6 +294,94 @@ impl Agent {
             config.api_key.as_deref(),
             config,
         );
+
+        // Register MCP tools (local stdio/SSE servers + ContextVM)
+        {
+            use crate::mcp;
+            let handle = tokio::runtime::Handle::current();
+
+            // Local MCP servers
+            for server_entry in &config.mcp.servers {
+                let result: Option<anyhow::Result<mcp::McpLocalBridge>> =
+                    tokio::task::block_in_place(|| {
+                        handle.block_on(async {
+                            if server_entry.transport == "sse" {
+                                if let Some(url) = &server_entry.url {
+                                    let sse_cfg = mcp::local::McpSseConfig {
+                                        name: server_entry.name.clone(),
+                                        url: url.clone(),
+                                    };
+                                    Some(mcp::McpLocalBridge::from_sse(&sse_cfg).await)
+                                } else {
+                                    tracing::warn!(server = %server_entry.name, "MCP SSE server missing 'url'");
+                                    None
+                                }
+                            } else if let Some(command) = &server_entry.command {
+                                let stdio_cfg = mcp::local::McpServerConfig {
+                                    name: server_entry.name.clone(),
+                                    command: command.clone(),
+                                    args: server_entry.args.clone(),
+                                    env: server_entry.env.clone(),
+                                    working_dir: server_entry.working_dir.as_ref().map(std::path::PathBuf::from),
+                                };
+                                Some(mcp::McpLocalBridge::from_stdio(&stdio_cfg).await)
+                            } else {
+                                tracing::warn!(server = %server_entry.name, "MCP stdio server missing 'command'");
+                                None
+                            }
+                        })
+                    });
+
+                if let Some(Ok(bridge)) = result {
+                    let mcp_tools = bridge.into_tools();
+                    tracing::info!(
+                        server = %server_entry.name,
+                        tool_count = mcp_tools.len(),
+                        "Registered MCP tools"
+                    );
+                    tools.extend(mcp_tools);
+                } else if let Some(Err(e)) = result {
+                    tracing::warn!(server = %server_entry.name, error = %e, "Failed to connect MCP server");
+                }
+            }
+
+            // ContextVM (MCP over Nostr)
+            if let Some(cvm) = &config.mcp.contextvm {
+                if cvm.enabled && !cvm.relays.is_empty() {
+                    let server_filter: Vec<nostr_sdk::PublicKey> = cvm
+                        .servers
+                        .iter()
+                        .filter_map(|s| {
+                            s.parse::<nostr_sdk::PublicKey>().ok()
+                        })
+                        .collect();
+
+                    let cvm_config = mcp::contextvm::ContextVmConfig {
+                        relays: cvm.relays.clone(),
+                        keys: nostr_sdk::Keys::generate(),
+                        server_filter,
+                        call_timeout: std::time::Duration::from_secs(cvm.timeout_secs),
+                        discovery_timeout: std::time::Duration::from_secs(10),
+                    };
+
+                    let cvm_result: anyhow::Result<mcp::McpContextVmBridge> =
+                        tokio::task::block_in_place(|| {
+                            handle.block_on(mcp::McpContextVmBridge::connect(&cvm_config))
+                        });
+
+                    match cvm_result {
+                        Ok(bridge) => {
+                            let cvm_tools: Vec<Box<dyn crate::tools::Tool>> = bridge.into_tools();
+                            tracing::info!(tool_count = cvm_tools.len(), "Registered ContextVM tools");
+                            tools.extend(cvm_tools);
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = %e, "Failed to connect ContextVM");
+                        }
+                    }
+                }
+            }
+        }
 
         let provider_name = config.default_provider.as_deref().unwrap_or("openrouter");
 

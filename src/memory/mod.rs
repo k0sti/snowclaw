@@ -1,18 +1,25 @@
 pub mod backend;
 pub mod chunker;
 pub mod cli;
+pub mod doc_index;
 pub mod embeddings;
+pub mod file_indexer;
 pub mod hygiene;
 pub mod lucid;
 pub mod markdown;
+pub mod message_index;
 pub mod none;
+pub mod nostr;
+pub mod nostr_sqlite;
 #[cfg(feature = "memory-postgres")]
 pub mod postgres;
 pub mod qdrant;
 pub mod response_cache;
 pub mod snapshot;
+pub mod social;
 pub mod sqlite;
 pub mod traits;
+pub mod unified_search;
 pub mod vector;
 
 #[allow(unused_imports)]
@@ -23,6 +30,8 @@ pub use backend::{
 pub use lucid::LucidMemory;
 pub use markdown::MarkdownMemory;
 pub use none::NoneMemory;
+pub use nostr::NostrMemory;
+pub use nostr_sqlite::NostrSqliteMemory;
 #[cfg(feature = "memory-postgres")]
 pub use postgres::PostgresMemory;
 pub use qdrant::QdrantMemory;
@@ -58,6 +67,7 @@ where
         MemoryBackendKind::Qdrant | MemoryBackendKind::Markdown => {
             Ok(Box::new(MarkdownMemory::new(workspace_dir)))
         }
+        MemoryBackendKind::Nostr => Ok(Box::new(NostrMemory::local_only(workspace_dir))),
         MemoryBackendKind::None => Ok(Box::new(NoneMemory::new())),
         MemoryBackendKind::Unknown => {
             tracing::warn!(
@@ -198,7 +208,8 @@ pub fn create_memory_with_storage_and_routes(
 ) -> anyhow::Result<Box<dyn Memory>> {
     let backend_name = effective_memory_backend_name(&config.backend, storage_provider);
     let backend_kind = classify_memory_backend(&backend_name);
-    let resolved_embedding = resolve_embedding_config(config, embedding_routes, api_key);
+    let embedding_key = config.embedding_api_key.as_deref().or(api_key);
+    let resolved_embedding = resolve_embedding_config(config, embedding_routes, embedding_key);
 
     // Best-effort memory hygiene/retention pass (throttled by state file).
     if let Err(e) = hygiene::run_if_due(config, workspace_dir) {
@@ -338,6 +349,34 @@ pub fn create_memory_with_storage_and_routes(
             qdrant_api_key,
             embedder,
         )));
+    }
+
+    // Nostr backend: composite Nostr+SQLite for relay persistence + local semantic search.
+    if matches!(backend_kind, MemoryBackendKind::Nostr) {
+        let nsec = config.nsec.clone().or_else(|| std::env::var("SNOWCLAW_NSEC").ok());
+
+        let embedder: Arc<dyn embeddings::EmbeddingProvider> =
+            Arc::from(embeddings::create_embedding_provider(
+                &resolved_embedding.provider,
+                resolved_embedding.api_key.as_deref(),
+                &resolved_embedding.model,
+                resolved_embedding.dimensions,
+            ));
+
+        #[allow(clippy::cast_possible_truncation)]
+        let mem = NostrSqliteMemory::new(
+            config.local_relay.as_deref(),
+            config.local_relay.as_deref(),
+            nsec.as_deref(),
+            workspace_dir,
+            embedder,
+            config.vector_weight as f32,
+            config.keyword_weight as f32,
+            config.embedding_cache_size,
+            config.sqlite_open_timeout_secs,
+            config.encrypted_memory.unwrap_or(false),
+        )?;
+        return Ok(Box::new(mem));
     }
 
     create_memory_with_builders(

@@ -64,11 +64,14 @@ pub mod subagent_manage;
 pub mod subagent_registry;
 pub mod subagent_spawn;
 pub mod task_plan;
+pub mod agent_lesson;
+pub mod social_search;
 pub mod traits;
 pub mod url_validation;
 pub mod wasm_module;
 pub mod wasm_tool;
 pub mod web_fetch;
+pub mod nostr_tasks;
 pub mod web_search_tool;
 
 pub use apply_patch::ApplyPatchTool;
@@ -122,6 +125,9 @@ pub use traits::Tool;
 pub use traits::{ToolResult, ToolSpec};
 pub use wasm_module::WasmModuleTool;
 pub use web_fetch::WebFetchTool;
+pub use agent_lesson::AgentLessonTool;
+pub use nostr_tasks::NostrTaskTool;
+pub use social_search::SocialSearchTool;
 pub use web_search_tool::WebSearchTool;
 
 use crate::config::{Config, DelegateAgentConfig};
@@ -282,6 +288,19 @@ pub fn all_tools_with_runtime(
             security.clone(),
             workspace_dir.to_path_buf(),
         )),
+        Arc::new(NostrTaskTool::new(security.clone(), workspace_dir)),
+        Arc::new(SocialSearchTool::new(
+            root_config
+                .config_path
+                .parent()
+                .unwrap_or(std::path::Path::new(".")),
+        )),
+        Arc::new(AgentLessonTool::new(
+            root_config
+                .config_path
+                .parent()
+                .unwrap_or(std::path::Path::new(".")),
+        )),
     ];
 
     if has_shell_access {
@@ -329,6 +348,7 @@ pub fn all_tools_with_runtime(
             browser_config.allowed_domains.clone(),
             browser_config.session_name.clone(),
             browser_config.backend.clone(),
+            browser_config.pinchtab_url.clone(),
             browser_config.native_headless,
             browser_config.native_webdriver_url.clone(),
             browser_config.native_chrome_path.clone(),

@@ -619,6 +619,7 @@ impl Provider for OllamaProvider {
             Some(TokenUsage {
                 input_tokens: response.prompt_eval_count,
                 output_tokens: response.eval_count,
+                ..Default::default()
             })
         } else {
             None

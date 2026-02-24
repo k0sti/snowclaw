@@ -148,6 +148,10 @@ struct AnthropicUsage {
     input_tokens: Option<u64>,
     #[serde(default)]
     output_tokens: Option<u64>,
+    #[serde(default)]
+    cache_creation_input_tokens: Option<u64>,
+    #[serde(default)]
+    cache_read_input_tokens: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -420,6 +424,8 @@ impl AnthropicProvider {
         let usage = response.usage.map(|u| TokenUsage {
             input_tokens: u.input_tokens,
             output_tokens: u.output_tokens,
+            cache_read_tokens: u.cache_read_input_tokens,
+            cache_write_tokens: u.cache_creation_input_tokens,
         });
 
         for block in response.content {
@@ -1396,6 +1402,21 @@ mod tests {
         let usage = result.usage.unwrap();
         assert_eq!(usage.input_tokens, Some(300));
         assert_eq!(usage.output_tokens, Some(75));
+    }
+
+    #[test]
+    fn native_response_parses_cache_tokens() {
+        let json = r#"{
+            "content": [{"type": "text", "text": "Hello"}],
+            "usage": {"input_tokens": 300, "output_tokens": 75, "cache_creation_input_tokens": 1000, "cache_read_input_tokens": 500}
+        }"#;
+        let resp: NativeChatResponse = serde_json::from_str(json).unwrap();
+        let result = AnthropicProvider::parse_native_response(resp);
+        let usage = result.usage.unwrap();
+        assert_eq!(usage.input_tokens, Some(300));
+        assert_eq!(usage.output_tokens, Some(75));
+        assert_eq!(usage.cache_write_tokens, Some(1000));
+        assert_eq!(usage.cache_read_tokens, Some(500));
     }
 
     #[test]

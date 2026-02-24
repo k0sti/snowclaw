@@ -11,7 +11,7 @@ pub use schema::{
     DockerRuntimeConfig, EmbeddingRouteConfig, EstopConfig, FeishuConfig, GatewayConfig,
     GroupReplyConfig, GroupReplyMode, HardwareConfig, HardwareTransport, HeartbeatConfig,
     HooksConfig, HttpRequestConfig, IMessageConfig, IdentityConfig, LarkConfig, MatrixConfig,
-    MemoryConfig, ModelRouteConfig, MultimodalConfig, NextcloudTalkConfig,
+    McpConfig, MemoryConfig, ModelRouteConfig, MultimodalConfig, NextcloudTalkConfig,
     NonCliNaturalLanguageApprovalMode, ObservabilityConfig, OtpChallengeDelivery, OtpConfig,
     OtpMethod, PeripheralBoardConfig, PeripheralsConfig, PerplexityFilterConfig, PluginEntryConfig,
     PluginsConfig, ProviderConfig, ProxyConfig, ProxyScope, QdrantConfig,
@@ -21,7 +21,7 @@ pub use schema::{
     SlackConfig, StorageConfig, StorageProviderConfig, StorageProviderSection, StreamMode,
     SyscallAnomalyConfig, TelegramConfig, TranscriptionConfig, TunnelConfig, UrlAccessConfig,
     WasmCapabilityEscalationMode, WasmConfig, WasmModuleHashPolicy, WasmRuntimeConfig,
-    WasmSecurityConfig, WebFetchConfig, WebSearchConfig, WebhookConfig,
+    WasmSecurityConfig, WebFetchConfig, WebSearchConfig, WebhookConfig, APP_DIR_NAME,
 };
 
 pub fn name_and_presence<T: traits::ChannelConfig>(channel: Option<&T>) -> (&'static str, bool) {
