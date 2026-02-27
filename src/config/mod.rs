@@ -23,6 +23,7 @@ pub use schema::{
     SyscallAnomalyConfig, TelegramConfig, TranscriptionConfig, TunnelConfig, UrlAccessConfig,
     WasmCapabilityEscalationMode, WasmConfig, WasmModuleHashPolicy, WasmRuntimeConfig, NostrConfig,
     WasmSecurityConfig, WebFetchConfig, WebSearchConfig, WebhookConfig, APP_DIR_NAME, ContextVmEntry,
+    CollectiveMemoryConfig,
 };
 
 pub fn name_and_presence<T: traits::ChannelConfig>(channel: Option<&T>) -> (&'static str, bool) {

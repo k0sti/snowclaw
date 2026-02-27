@@ -6602,8 +6602,12 @@ dependencies = [
 name = "snow-memory"
 version = "0.1.0"
 dependencies = [
+ "hex",
+ "log",
+ "rusqlite",
  "serde",
  "serde_json",
+ "sha2",
  "toml 1.0.3+spec-1.1.0",
 ]
 
@@ -9395,6 +9399,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "shellexpand 3.1.1",
+ "snow-memory",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",

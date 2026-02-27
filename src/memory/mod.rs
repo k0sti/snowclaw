@@ -1,6 +1,7 @@
 pub mod backend;
 pub mod chunker;
 pub mod cli;
+pub mod collective;
 pub mod doc_index;
 pub mod embeddings;
 pub mod file_indexer;
@@ -31,6 +32,7 @@ pub use lucid::LucidMemory;
 pub use markdown::MarkdownMemory;
 pub use none::NoneMemory;
 pub use nostr::NostrMemory;
+pub use collective::CollectiveMemory;
 pub use nostr_sqlite::NostrSqliteMemory;
 #[cfg(feature = "memory-postgres")]
 pub use postgres::PostgresMemory;
@@ -68,6 +70,9 @@ where
             Ok(Box::new(MarkdownMemory::new(workspace_dir)))
         }
         MemoryBackendKind::Nostr => Ok(Box::new(NostrMemory::local_only(workspace_dir))),
+        MemoryBackendKind::Collective => {
+            anyhow::bail!("collective backend must be created via create_memory_with_storage_and_routes")
+        }
         MemoryBackendKind::None => Ok(Box::new(NoneMemory::new())),
         MemoryBackendKind::Unknown => {
             tracing::warn!(
@@ -379,6 +384,12 @@ pub fn create_memory_with_storage_and_routes(
         return Ok(Box::new(mem));
     }
 
+    // Collective memory: snow-memory FTS5 index with trust-ranked search.
+    if matches!(backend_kind, MemoryBackendKind::Collective) {
+        let mem = CollectiveMemory::new(workspace_dir, &config.collective)?;
+        return Ok(Box::new(mem));
+    }
+
     create_memory_with_builders(
         &backend_name,
         workspace_dir,
@@ -499,6 +510,17 @@ mod tests {
         };
         let mem = create_memory(&cfg, tmp.path(), None).unwrap();
         assert_eq!(mem.name(), "none");
+    }
+
+    #[test]
+    fn factory_collective() {
+        let tmp = TempDir::new().unwrap();
+        let cfg = MemoryConfig {
+            backend: "collective".into(),
+            ..MemoryConfig::default()
+        };
+        let mem = create_memory(&cfg, tmp.path(), None).unwrap();
+        assert_eq!(mem.name(), "collective");
     }
 
     #[test]

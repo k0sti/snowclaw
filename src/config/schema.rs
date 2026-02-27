@@ -488,6 +488,8 @@ pub use crate::config::snowclaw_schema::McpServerEntry;
 
 pub use crate::config::snowclaw_schema::ContextVmEntry;
 
+pub use crate::config::snowclaw_schema::CollectiveMemoryConfig;
+
 
 
 /// Transport type for MCP server connections.
@@ -2013,6 +2015,12 @@ pub struct MemoryConfig {
     /// Re-index interval in minutes (default: 30)
     #[serde(default = "default_index_interval_minutes")]
     pub index_interval_minutes: u64,
+
+    // ── Collective memory (snow-memory) ──────────────────────────
+    /// Configuration for the collective memory layer.
+    /// Only used when `backend = "collective"`.
+    #[serde(default)]
+    pub collective: crate::config::snowclaw_schema::CollectiveMemoryConfig,
 }
 
 fn default_embedding_provider() -> String {
@@ -2090,6 +2098,7 @@ impl Default for MemoryConfig {
             embedding_api_key: None,
             indexed_paths: Vec::new(),
             index_interval_minutes: default_index_interval_minutes(),
+            collective: crate::config::snowclaw_schema::CollectiveMemoryConfig::default(),
         }
     }
 }

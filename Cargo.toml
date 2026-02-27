@@ -137,6 +137,9 @@ lru = "0.12"
 # Nostr protocol
 nostr-core = { path = "crates/nostr-core" }
 
+# Collective memory (snow-memory)
+snow-memory = { path = "crates/snow-memory" }
+
 # WebSocket client channels (Discord/Lark/DingTalk/Nostr)
 tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink"] }

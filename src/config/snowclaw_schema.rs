@@ -146,6 +146,99 @@ pub fn default_cost_enabled() -> bool {
     true
 }
 
+// ── Collective memory config ─────────────────────────────────────
+
+/// A trusted source entry for collective memory ranking.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CollectiveSourceEntry {
+    /// Hex pubkey of the trusted source.
+    #[serde(default)]
+    pub npub: Option<String>,
+    /// Group identifier.
+    #[serde(default)]
+    pub group: Option<String>,
+    /// Trust weight (0.0–1.0). Higher = more trusted.
+    #[serde(default = "default_trust_weight")]
+    pub trust: f64,
+}
+
+fn default_trust_weight() -> f64 {
+    0.5
+}
+
+/// Configuration for the collective memory backend (snow-memory).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CollectiveMemoryConfig {
+    /// Enable the collective memory backend.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Path to the collective memory SQLite database.
+    /// Relative paths are resolved from the workspace directory.
+    #[serde(default = "default_collective_db_path")]
+    pub db_path: String,
+    /// Relay URLs for publishing/subscribing to collective memories.
+    #[serde(default)]
+    pub relay_urls: Vec<String>,
+    /// Source trust preferences for ranking.
+    #[serde(default)]
+    pub source_preferences: Vec<CollectiveSourceEntry>,
+    /// Tier 1 model patterns (highest capability).
+    #[serde(default)]
+    pub tier1: Vec<String>,
+    /// Tier 2 model patterns.
+    #[serde(default)]
+    pub tier2: Vec<String>,
+    /// Tier 3 model patterns.
+    #[serde(default)]
+    pub tier3: Vec<String>,
+    /// Tier 4 model patterns (lowest capability).
+    #[serde(default)]
+    pub tier4: Vec<String>,
+}
+
+fn default_collective_db_path() -> String {
+    "collective/memories.db".to_string()
+}
+
+impl Default for CollectiveMemoryConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            db_path: default_collective_db_path(),
+            relay_urls: vec![],
+            source_preferences: vec![],
+            tier1: vec![],
+            tier2: vec![],
+            tier3: vec![],
+            tier4: vec![],
+        }
+    }
+}
+
+impl CollectiveMemoryConfig {
+    /// Convert to the snow-memory crate's `MemoryConfig` for ranking.
+    pub fn to_snow_memory_config(&self) -> snow_memory::config::MemoryConfig {
+        let sm_defaults = snow_memory::config::MemoryConfig::default();
+        snow_memory::config::MemoryConfig {
+            sources: self
+                .source_preferences
+                .iter()
+                .map(|s| snow_memory::SourcePreference {
+                    npub: s.npub.clone(),
+                    group: s.group.clone(),
+                    trust: s.trust,
+                })
+                .collect(),
+            tier1: if self.tier1.is_empty() { sm_defaults.tier1 } else { self.tier1.clone() },
+            tier2: if self.tier2.is_empty() { sm_defaults.tier2 } else { self.tier2.clone() },
+            tier3: if self.tier3.is_empty() { sm_defaults.tier3 } else { self.tier3.clone() },
+            tier4: if self.tier4.is_empty() { sm_defaults.tier4 } else { self.tier4.clone() },
+            relays_public: self.relay_urls.clone(),
+            relays_group: vec![],
+        }
+    }
+}
+
 // ── Browser pinchtab extension ──────────────────────────────────
 
 /// Default Pinchtab HTTP API base URL.

@@ -6,6 +6,7 @@ pub enum MemoryBackendKind {
     Qdrant,
     Markdown,
     Nostr,
+    Collective,
     None,
     Unknown,
 }
@@ -75,6 +76,15 @@ const NOSTR_PROFILE: MemoryBackendProfile = MemoryBackendProfile {
     optional_dependency: false,
 };
 
+const COLLECTIVE_PROFILE: MemoryBackendProfile = MemoryBackendProfile {
+    key: "collective",
+    label: "Collective — snow-memory FTS5 index with trust-ranked search",
+    auto_save_default: true,
+    uses_sqlite_hygiene: false,
+    sqlite_based: false,
+    optional_dependency: false,
+};
+
 const NONE_PROFILE: MemoryBackendProfile = MemoryBackendProfile {
     key: "none",
     label: "None — disable persistent memory",
@@ -116,6 +126,7 @@ pub fn classify_memory_backend(backend: &str) -> MemoryBackendKind {
         "qdrant" => MemoryBackendKind::Qdrant,
         "markdown" => MemoryBackendKind::Markdown,
         "nostr" => MemoryBackendKind::Nostr,
+        "collective" => MemoryBackendKind::Collective,
         "none" => MemoryBackendKind::None,
         _ => MemoryBackendKind::Unknown,
     }
@@ -129,6 +140,7 @@ pub fn memory_backend_profile(backend: &str) -> MemoryBackendProfile {
         MemoryBackendKind::Qdrant => QDRANT_PROFILE,
         MemoryBackendKind::Markdown => MARKDOWN_PROFILE,
         MemoryBackendKind::Nostr => NOSTR_PROFILE,
+        MemoryBackendKind::Collective => COLLECTIVE_PROFILE,
         MemoryBackendKind::None => NONE_PROFILE,
         MemoryBackendKind::Unknown => CUSTOM_PROFILE,
     }

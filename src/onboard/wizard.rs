@@ -347,6 +347,7 @@ fn memory_config_defaults_for_backend(backend: &str) -> MemoryConfig {
         qdrant: crate::config::QdrantConfig::default(),
         indexed_paths: Vec::new(),
         index_interval_minutes: 30,
+        collective: crate::config::CollectiveMemoryConfig::default(),
     }
 }
 
