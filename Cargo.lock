@@ -6608,6 +6608,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "snow-ui"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde-wasm-bindgen",
+ "serde_json",
+ "snow-memory",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "socket2"
 version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

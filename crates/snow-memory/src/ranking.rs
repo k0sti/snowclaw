@@ -76,7 +76,7 @@ pub fn rank_memories(
 }
 
 /// A pair of conflicting memories on the same topic from different sources.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Conflict {
     pub topic: String,
     pub memories: Vec<Memory>,

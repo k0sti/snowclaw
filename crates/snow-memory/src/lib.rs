@@ -10,5 +10,5 @@ pub mod ranking;
 pub mod types;
 
 pub use config::MemoryConfig;
-pub use ranking::{detect_conflicts, rank_memories, resolve_conflict};
+pub use ranking::{detect_conflicts, rank_memories, resolve_conflict, Conflict};
 pub use types::{AgentProfile, Memory, MemoryTier, SearchResult, SourcePreference};
