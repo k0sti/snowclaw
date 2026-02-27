@@ -50,6 +50,9 @@ pub struct NostrConfig {
     /// Number of recent messages to include as context
     #[serde(default = "default_context_history")]
     pub context_history: usize,
+    /// Extra Nostr event kinds to subscribe to beyond NIP-29 defaults (e.g. [1311, 1312] for NIP-53 live)
+    #[serde(default)]
+    pub extra_kinds: Vec<u16>,
 }
 
 impl ChannelConfig for NostrConfig {

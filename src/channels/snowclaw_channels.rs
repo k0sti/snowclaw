@@ -61,6 +61,7 @@ pub(crate) async fn append_nostr_channel(
             .as_ref()
             .and_then(|s| nostr_sdk::PublicKey::parse(s).ok()),
         context_history: ns.context_history,
+        extra_kinds: ns.extra_kinds.clone(),
         persist_dir: config
             .config_path
             .parent()
