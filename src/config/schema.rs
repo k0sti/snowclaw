@@ -10,7 +10,7 @@ use directories::UserDirs;
 pub const APP_DIR_NAME: &str = ".snowclaw";
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{OnceLock, RwLock};
 #[cfg(unix)]
@@ -61,6 +61,31 @@ const SUPPORTED_PROXY_SERVICE_SELECTORS: &[&str] = &[
 static RUNTIME_PROXY_CONFIG: OnceLock<RwLock<ProxyConfig>> = OnceLock::new();
 static RUNTIME_PROXY_CLIENT_CACHE: OnceLock<RwLock<HashMap<String, reqwest::Client>>> =
     OnceLock::new();
+
+
+/// Protocol mode for `custom:` OpenAI-compatible providers.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProviderApiMode {
+    /// Default behavior: `/chat/completions` first, optional `/responses`
+    /// fallback when supported.
+    OpenAiChatCompletions,
+    /// Responses-first behavior: call `/responses` directly.
+    OpenAiResponses,
+}
+
+impl ProviderApiMode {
+    pub fn as_compatible_mode(self) -> crate::providers::compatible::CompatibleApiMode {
+        match self {
+            Self::OpenAiChatCompletions => {
+                crate::providers::compatible::CompatibleApiMode::OpenAiChatCompletions
+            }
+            Self::OpenAiResponses => {
+                crate::providers::compatible::CompatibleApiMode::OpenAiResponses
+            }
+        }
+    }
+}
 
 // ── Top-level config ──────────────────────────────────────────────
 
@@ -226,6 +251,42 @@ pub struct Config {
     /// MCP (Model Context Protocol) server configuration (`[mcp]`).
     #[serde(default)]
     pub mcp: McpConfig,
+
+    /// Provider behavior overrides (`[provider]` section).
+    #[serde(default)]
+    pub provider: ProviderConfig,
+
+    /// Optional API protocol mode for `custom:` providers.
+    #[serde(default)]
+    pub provider_api: Option<ProviderApiMode>,
+
+    /// Vision support override for the active provider/model.
+    #[serde(default)]
+    pub model_support_vision: Option<bool>,
+
+    /// Delegate coordination runtime configuration (`[coordination]`).
+    #[serde(default)]
+    pub coordination: CoordinationConfig,
+
+    /// Inter-process agent communication (`[agents_ipc]`).
+    #[serde(default)]
+    pub agents_ipc: AgentsIpcConfig,
+
+    /// Research phase configuration (`[research]`). Proactive information gathering.
+    #[serde(default)]
+    pub research: ResearchPhaseConfig,
+
+    /// WASM plugin engine configuration (`[wasm]` section).
+    #[serde(default)]
+    pub wasm: WasmConfig,
+
+    /// Plugin system configuration (discovery, loading, per-plugin config).
+    #[serde(default)]
+    pub plugins: PluginsConfig,
+
+    /// Goal loop configuration (`[goal_loop]`).
+    #[serde(default)]
+    pub goal_loop: GoalLoopConfig,
 }
 
 /// Named provider profile definition compatible with Codex app-server style config.
@@ -246,6 +307,14 @@ pub struct ModelProviderConfig {
 }
 
 // ── Delegate Agents ──────────────────────────────────────────────
+
+/// Provider behavior overrides (`[provider]` section).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+pub struct ProviderConfig {
+    /// Optional reasoning level override for providers that support explicit levels.
+    #[serde(default)]
+    pub reasoning_level: Option<String>,
+}
 
 /// Configuration for a delegate sub-agent used by the `delegate` tool.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -406,9 +475,12 @@ impl Default for TranscriptionConfig {
 /// MCP (Model Context Protocol) configuration (`[mcp]` section).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct McpConfig {
-    /// Local MCP servers (stdio or SSE transport).
+    /// Enable MCP tool loading.
     #[serde(default)]
-    pub servers: Vec<McpServerEntry>,
+    pub enabled: bool,
+    /// Configured MCP servers.
+    #[serde(default, alias = "mcpServers")]
+    pub servers: Vec<McpServerConfig>,
 
     /// ContextVM configuration (MCP over Nostr relays).
     #[serde(default)]
@@ -463,6 +535,47 @@ fn default_mcp_transport() -> String {
 
 fn default_contextvm_timeout() -> u64 {
     30
+}
+
+/// Transport type for MCP server connections.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum McpTransport {
+    /// Spawn a local process and communicate over stdin/stdout.
+    #[default]
+    Stdio,
+    /// Connect via HTTP POST.
+    Http,
+    /// Connect via HTTP + Server-Sent Events.
+    Sse,
+}
+
+/// Configuration for a single external MCP server.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+pub struct McpServerConfig {
+    /// Display name used as a tool prefix.
+    pub name: String,
+    /// Transport type (default: stdio).
+    #[serde(default)]
+    pub transport: McpTransport,
+    /// URL for HTTP/SSE transports.
+    #[serde(default)]
+    pub url: Option<String>,
+    /// Executable to spawn for stdio transport.
+    #[serde(default)]
+    pub command: String,
+    /// Command arguments for stdio transport.
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// Optional environment variables for stdio transport.
+    #[serde(default)]
+    pub env: HashMap<String, String>,
+    /// Optional HTTP headers for HTTP/SSE transports.
+    #[serde(default)]
+    pub headers: HashMap<String, String>,
+    /// Optional per-call timeout in seconds.
+    #[serde(default)]
+    pub tool_timeout_secs: Option<u64>,
 }
 
 /// Agent orchestration configuration (`[agent]` section).
@@ -544,6 +657,12 @@ pub struct SkillsConfig {
     /// `full` preserves legacy behavior. `compact` keeps context small and loads skills on demand.
     #[serde(default)]
     pub prompt_injection_mode: SkillsPromptInjectionMode,
+    /// Allow script-like files in skills. Default: `false` (secure by default).
+    #[serde(default)]
+    pub allow_scripts: bool,
+    /// Optional ClawHub API token for authenticated skill downloads.
+    #[serde(default)]
+    pub clawhub_token: Option<String>,
 }
 
 impl Default for SkillsConfig {
@@ -552,6 +671,8 @@ impl Default for SkillsConfig {
             open_skills_enabled: false,
             open_skills_dir: None,
             prompt_injection_mode: SkillsPromptInjectionMode::default(),
+            allow_scripts: false,
+            clawhub_token: None,
         }
     }
 }
@@ -877,7 +998,25 @@ pub struct GatewayConfig {
     /// Maximum distinct idempotency keys retained in memory.
     #[serde(default = "default_gateway_idempotency_max_keys")]
     pub idempotency_max_keys: usize,
+    /// Node-control protocol scaffold (`[gateway.node_control]`).
+    #[serde(default)]
+    pub node_control: NodeControlConfig,
 }
+
+/// Node-control scaffold settings under `[gateway.node_control]`.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, JsonSchema)]
+pub struct NodeControlConfig {
+    /// Enable experimental node-control API endpoints.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Optional extra shared token for node-control API calls.
+    #[serde(default)]
+    pub auth_token: Option<String>,
+    /// Allowlist of remote node IDs.
+    #[serde(default)]
+    pub allowed_node_ids: Vec<String>,
+}
+
 
 fn default_gateway_port() -> u16 {
     42617
@@ -925,6 +1064,7 @@ impl Default for GatewayConfig {
             rate_limit_max_keys: default_gateway_rate_limit_max_keys(),
             idempotency_ttl_secs: default_idempotency_ttl_secs(),
             idempotency_max_keys: default_gateway_idempotency_max_keys(),
+            node_control: NodeControlConfig::default(),
         }
     }
 }
@@ -1110,6 +1250,9 @@ pub struct HttpRequestConfig {
     /// Request timeout in seconds (default: 30)
     #[serde(default = "default_http_timeout_secs")]
     pub timeout_secs: u64,
+    /// User-Agent string sent with HTTP requests
+    #[serde(default = "default_user_agent")]
+    pub user_agent: String,
 }
 
 impl Default for HttpRequestConfig {
@@ -1119,6 +1262,7 @@ impl Default for HttpRequestConfig {
             allowed_domains: vec![],
             max_response_size: default_http_max_response_size(),
             timeout_secs: default_http_timeout_secs(),
+            user_agent: default_user_agent(),
         }
     }
 }
@@ -1156,6 +1300,18 @@ pub struct WebFetchConfig {
     /// Request timeout in seconds (default: 30)
     #[serde(default = "default_web_fetch_timeout_secs")]
     pub timeout_secs: u64,
+    /// Provider: "fast_html2md", "nanohtml2text", "firecrawl", or "tavily"
+    #[serde(default = "default_web_fetch_provider")]
+    pub provider: String,
+    /// Optional provider API key
+    #[serde(default)]
+    pub api_key: Option<String>,
+    /// Optional provider API URL override
+    #[serde(default)]
+    pub api_url: Option<String>,
+    /// User-Agent string sent with fetch requests
+    #[serde(default = "default_user_agent")]
+    pub user_agent: String,
 }
 
 fn default_web_fetch_max_response_size() -> usize {
@@ -1170,10 +1326,14 @@ impl Default for WebFetchConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            provider: default_web_fetch_provider(),
+            api_key: None,
+            api_url: None,
             allowed_domains: vec!["*".into()],
             blocked_domains: vec![],
             max_response_size: default_web_fetch_max_response_size(),
             timeout_secs: default_web_fetch_timeout_secs(),
+            user_agent: default_user_agent(),
         }
     }
 }
@@ -1186,9 +1346,15 @@ pub struct WebSearchConfig {
     /// Enable `web_search_tool` for web searches
     #[serde(default)]
     pub enabled: bool,
-    /// Search provider: "duckduckgo" (free, no API key) or "brave" (requires API key)
+    /// Search provider: "duckduckgo", "brave", "firecrawl", or "tavily"
     #[serde(default = "default_web_search_provider")]
     pub provider: String,
+    /// Generic provider API key (used by firecrawl, tavily, and as fallback for brave).
+    #[serde(default)]
+    pub api_key: Option<String>,
+    /// Optional provider API URL override (for self-hosted providers)
+    #[serde(default)]
+    pub api_url: Option<String>,
     /// Brave Search API key (required if provider is "brave")
     #[serde(default)]
     pub brave_api_key: Option<String>,
@@ -1198,6 +1364,9 @@ pub struct WebSearchConfig {
     /// Request timeout in seconds
     #[serde(default = "default_web_search_timeout_secs")]
     pub timeout_secs: u64,
+    /// User-Agent string sent with search requests
+    #[serde(default = "default_user_agent")]
+    pub user_agent: String,
 }
 
 fn default_web_search_provider() -> String {
@@ -1217,9 +1386,12 @@ impl Default for WebSearchConfig {
         Self {
             enabled: false,
             provider: default_web_search_provider(),
+            api_key: None,
+            api_url: None,
             brave_api_key: None,
             max_results: default_web_search_max_results(),
             timeout_secs: default_web_search_timeout_secs(),
+            user_agent: default_user_agent(),
         }
     }
 }
@@ -2070,6 +2242,19 @@ impl Default for BuiltinHooksConfig {
 
 /// Autonomy and security policy configuration (`[autonomy]` section).
 ///
+/// Natural-language behavior for non-CLI approval-management commands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum NonCliNaturalLanguageApprovalMode {
+    /// Do not treat natural-language text as approval-management commands.
+    Disabled,
+    /// Natural-language approval phrases create a pending request.
+    RequestConfirm,
+    /// Natural-language approval phrases directly approve the named tool.
+    #[default]
+    Direct,
+}
+
 /// Controls what the agent is allowed to do: shell commands, filesystem access,
 /// risk approval gates, and per-policy budgets.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -2123,6 +2308,19 @@ pub struct AutonomyConfig {
     /// model in tool specs.
     #[serde(default)]
     pub non_cli_excluded_tools: Vec<String>,
+
+    /// Optional allowlist for who can manage non-CLI approval commands.
+    #[serde(default)]
+    pub non_cli_approval_approvers: Vec<String>,
+
+    /// Natural-language handling mode for non-CLI approval-management commands.
+    #[serde(default)]
+    pub non_cli_natural_language_approval_mode: NonCliNaturalLanguageApprovalMode,
+
+    /// Optional per-channel override for natural-language approval mode.
+    #[serde(default)]
+    pub non_cli_natural_language_approval_mode_by_channel:
+        HashMap<String, NonCliNaturalLanguageApprovalMode>,
 }
 
 fn default_auto_approve() -> Vec<String> {
@@ -2191,6 +2389,9 @@ impl Default for AutonomyConfig {
             always_ask: default_always_ask(),
             allowed_roots: Vec::new(),
             non_cli_excluded_tools: Vec::new(),
+            non_cli_approval_approvers: Vec::new(),
+            non_cli_natural_language_approval_mode: NonCliNaturalLanguageApprovalMode::default(),
+            non_cli_natural_language_approval_mode_by_channel: HashMap::new(),
         }
     }
 }
@@ -2214,6 +2415,14 @@ pub struct RuntimeConfig {
     /// - `Some(false)`: disable reasoning/thinking when supported
     #[serde(default)]
     pub reasoning_enabled: Option<bool>,
+
+    /// Deprecated: use `provider.reasoning_level` instead.
+    #[serde(default)]
+    pub reasoning_level: Option<String>,
+
+    /// WASM runtime configuration (`[runtime.wasm]` section).
+    #[serde(default)]
+    pub wasm: WasmRuntimeConfig,
 }
 
 /// Docker runtime configuration (`[runtime.docker]` section).
@@ -2288,6 +2497,8 @@ impl Default for RuntimeConfig {
             kind: default_runtime_kind(),
             docker: DockerRuntimeConfig::default(),
             reasoning_enabled: None,
+            reasoning_level: None,
+            wasm: WasmRuntimeConfig::default(),
         }
     }
 }
@@ -2436,6 +2647,9 @@ pub struct ModelRouteConfig {
     /// Optional API key override for this route's provider
     #[serde(default)]
     pub api_key: Option<String>,
+    /// Optional max_tokens override for this route.
+    #[serde(default)]
+    pub max_tokens: Option<u32>,
 }
 
 // ── Embedding routing ───────────────────────────────────────────
@@ -2873,6 +3087,27 @@ pub struct TelegramConfig {
     /// Direct messages are always processed.
     #[serde(default)]
     pub mention_only: bool,
+    /// Group-chat trigger controls.
+    #[serde(default)]
+    pub group_reply: Option<GroupReplyConfig>,
+    /// Optional custom base URL for Telegram-compatible APIs.
+    #[serde(default)]
+    pub base_url: Option<String>,
+}
+
+impl TelegramConfig {
+    #[must_use]
+    pub fn effective_group_reply_mode(&self) -> GroupReplyMode {
+        resolve_group_reply_mode(
+            self.group_reply.as_ref(),
+            Some(self.mention_only),
+            GroupReplyMode::AllMessages,
+        )
+    }
+    #[must_use]
+    pub fn group_reply_allowed_sender_ids(&self) -> Vec<String> {
+        clone_group_reply_allowed_sender_ids(self.group_reply.as_ref())
+    }
 }
 
 impl ChannelConfig for TelegramConfig {
@@ -2902,6 +3137,24 @@ pub struct DiscordConfig {
     /// Other messages in the guild are silently ignored.
     #[serde(default)]
     pub mention_only: bool,
+    /// Group-chat trigger controls.
+    #[serde(default)]
+    pub group_reply: Option<GroupReplyConfig>,
+}
+
+impl DiscordConfig {
+    #[must_use]
+    pub fn effective_group_reply_mode(&self) -> GroupReplyMode {
+        resolve_group_reply_mode(
+            self.group_reply.as_ref(),
+            Some(self.mention_only),
+            GroupReplyMode::AllMessages,
+        )
+    }
+    #[must_use]
+    pub fn group_reply_allowed_sender_ids(&self) -> Vec<String> {
+        clone_group_reply_allowed_sender_ids(self.group_reply.as_ref())
+    }
 }
 
 impl ChannelConfig for DiscordConfig {
@@ -2926,6 +3179,20 @@ pub struct SlackConfig {
     /// Allowed Slack user IDs. Empty = deny all.
     #[serde(default)]
     pub allowed_users: Vec<String>,
+    /// Group-chat trigger controls.
+    #[serde(default)]
+    pub group_reply: Option<GroupReplyConfig>,
+}
+
+impl SlackConfig {
+    #[must_use]
+    pub fn effective_group_reply_mode(&self) -> GroupReplyMode {
+        resolve_group_reply_mode(self.group_reply.as_ref(), None, GroupReplyMode::AllMessages)
+    }
+    #[must_use]
+    pub fn group_reply_allowed_sender_ids(&self) -> Vec<String> {
+        clone_group_reply_allowed_sender_ids(self.group_reply.as_ref())
+    }
 }
 
 impl ChannelConfig for SlackConfig {
@@ -2957,6 +3224,24 @@ pub struct MattermostConfig {
     /// Other messages in the channel are silently ignored.
     #[serde(default)]
     pub mention_only: Option<bool>,
+    /// Group-chat trigger controls.
+    #[serde(default)]
+    pub group_reply: Option<GroupReplyConfig>,
+}
+
+impl MattermostConfig {
+    #[must_use]
+    pub fn effective_group_reply_mode(&self) -> GroupReplyMode {
+        resolve_group_reply_mode(
+            self.group_reply.as_ref(),
+            Some(self.mention_only.unwrap_or(false)),
+            GroupReplyMode::AllMessages,
+        )
+    }
+    #[must_use]
+    pub fn group_reply_allowed_sender_ids(&self) -> Vec<String> {
+        clone_group_reply_allowed_sender_ids(self.group_reply.as_ref())
+    }
 }
 
 impl ChannelConfig for MattermostConfig {
@@ -3337,6 +3622,20 @@ pub struct FeishuConfig {
     /// Not required (and ignored) for websocket mode.
     #[serde(default)]
     pub port: Option<u16>,
+    /// Group-chat trigger controls.
+    #[serde(default)]
+    pub group_reply: Option<GroupReplyConfig>,
+}
+
+impl FeishuConfig {
+    #[must_use]
+    pub fn effective_group_reply_mode(&self) -> GroupReplyMode {
+        resolve_group_reply_mode(self.group_reply.as_ref(), None, GroupReplyMode::AllMessages)
+    }
+    #[must_use]
+    pub fn group_reply_allowed_sender_ids(&self) -> Vec<String> {
+        clone_group_reply_allowed_sender_ids(self.group_reply.as_ref())
+    }
 }
 
 impl ChannelConfig for FeishuConfig {
@@ -3369,9 +3668,25 @@ pub struct SecurityConfig {
     #[serde(default)]
     pub otp: OtpConfig,
 
+    /// Custom security role definitions used for user-level tool authorization.
+    #[serde(default)]
+    pub roles: Vec<SecurityRoleConfig>,
+
     /// Emergency-stop state machine configuration.
     #[serde(default)]
     pub estop: EstopConfig,
+
+    /// Syscall anomaly detection profile for daemon shell/process execution.
+    #[serde(default)]
+    pub syscall_anomaly: SyscallAnomalyConfig,
+
+    /// Lightweight statistical filter for adversarial suffixes (opt-in).
+    #[serde(default)]
+    pub perplexity_filter: PerplexityFilterConfig,
+
+    /// Shared URL access policy for network-enabled tools.
+    #[serde(default)]
+    pub url_access: UrlAccessConfig,
 }
 
 /// OTP validation strategy.
@@ -3649,6 +3964,12 @@ pub struct QQConfig {
     /// Allowed user IDs. Empty = deny all, "*" = allow all
     #[serde(default)]
     pub allowed_users: Vec<String>,
+    /// Event receive mode: "webhook" (default) or "websocket".
+    #[serde(default)]
+    pub receive_mode: QQReceiveMode,
+    /// API environment: "production" (default) or "sandbox".
+    #[serde(default)]
+    pub environment: QQEnvironment,
 }
 
 impl ChannelConfig for QQConfig {
@@ -3720,6 +4041,564 @@ pub fn default_nostr_relays() -> Vec<String> {
     ]
 }
 
+
+// ── Group reply ────────────────────────────────────────────────────
+
+/// Group-chat reply trigger mode for channels that support mention gating.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum GroupReplyMode {
+    /// Reply only when the bot is explicitly @-mentioned in group chats.
+    MentionOnly,
+    /// Reply to every message in group chats.
+    AllMessages,
+}
+
+impl GroupReplyMode {
+    #[must_use]
+    pub fn requires_mention(self) -> bool {
+        matches!(self, Self::MentionOnly)
+    }
+}
+
+/// Advanced group-chat trigger controls.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct GroupReplyConfig {
+    /// Optional explicit trigger mode.
+    #[serde(default)]
+    pub mode: Option<GroupReplyMode>,
+    /// Sender IDs that always trigger group replies.
+    #[serde(default)]
+    pub allowed_sender_ids: Vec<String>,
+}
+
+fn resolve_group_reply_mode(
+    group_reply: Option<&GroupReplyConfig>,
+    legacy_mention_only: Option<bool>,
+    default_mode: GroupReplyMode,
+) -> GroupReplyMode {
+    if let Some(mode) = group_reply.and_then(|cfg| cfg.mode) {
+        return mode;
+    }
+    if let Some(mention_only) = legacy_mention_only {
+        return if mention_only {
+            GroupReplyMode::MentionOnly
+        } else {
+            GroupReplyMode::AllMessages
+        };
+    }
+    default_mode
+}
+
+fn clone_group_reply_allowed_sender_ids(group_reply: Option<&GroupReplyConfig>) -> Vec<String> {
+    group_reply
+        .map(|cfg| cfg.allowed_sender_ids.clone())
+        .unwrap_or_default()
+}
+
+// ── OTP challenge delivery ─────────────────────────────────────────
+
+/// Channel delivery mode for OTP challenges.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum OtpChallengeDelivery {
+    /// Send OTP challenge in direct message/private channel.
+    #[default]
+    Dm,
+    /// Send OTP challenge in thread where supported.
+    Thread,
+    /// Send OTP challenge as ephemeral message where supported.
+    Ephemeral,
+}
+
+// ── QQ enums ────────────────────────────────────────────────────────
+
+/// QQ API environment.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum QQEnvironment {
+    #[default]
+    Production,
+    Sandbox,
+}
+
+/// QQ event receive mode.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum QQReceiveMode {
+    Websocket,
+    #[default]
+    Webhook,
+}
+
+// ── Security types ──────────────────────────────────────────────────
+
+/// Custom role definition for user-level authorization.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(deny_unknown_fields)]
+pub struct SecurityRoleConfig {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub allowed_tools: Vec<String>,
+    #[serde(default)]
+    pub denied_tools: Vec<String>,
+    #[serde(default)]
+    pub totp_gated: Vec<String>,
+    #[serde(default)]
+    pub inherits: Option<String>,
+    #[serde(default)]
+    pub gated_domains: Vec<String>,
+    #[serde(default)]
+    pub gated_domain_categories: Vec<String>,
+}
+
+/// Lightweight perplexity-style filter configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PerplexityFilterConfig {
+    #[serde(default)]
+    pub enable_perplexity_filter: bool,
+    #[serde(default = "default_perplexity_threshold")]
+    pub perplexity_threshold: f64,
+    #[serde(default = "default_perplexity_suffix_window_chars")]
+    pub suffix_window_chars: usize,
+    #[serde(default = "default_perplexity_min_prompt_chars")]
+    pub min_prompt_chars: usize,
+    #[serde(default = "default_perplexity_symbol_ratio_threshold")]
+    pub symbol_ratio_threshold: f64,
+}
+
+fn default_perplexity_threshold() -> f64 { 18.0 }
+fn default_perplexity_suffix_window_chars() -> usize { 64 }
+fn default_perplexity_min_prompt_chars() -> usize { 32 }
+fn default_perplexity_symbol_ratio_threshold() -> f64 { 0.20 }
+
+impl Default for PerplexityFilterConfig {
+    fn default() -> Self {
+        Self {
+            enable_perplexity_filter: false,
+            perplexity_threshold: default_perplexity_threshold(),
+            suffix_window_chars: default_perplexity_suffix_window_chars(),
+            min_prompt_chars: default_perplexity_min_prompt_chars(),
+            symbol_ratio_threshold: default_perplexity_symbol_ratio_threshold(),
+        }
+    }
+}
+
+/// Shared URL validation configuration used by network tools.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UrlAccessConfig {
+    #[serde(default = "default_true")]
+    pub block_private_ip: bool,
+    #[serde(default)]
+    pub allow_cidrs: Vec<String>,
+    #[serde(default)]
+    pub allow_domains: Vec<String>,
+    #[serde(default)]
+    pub allow_loopback: bool,
+}
+
+impl Default for UrlAccessConfig {
+    fn default() -> Self {
+        Self {
+            block_private_ip: true,
+            allow_cidrs: Vec::new(),
+            allow_domains: Vec::new(),
+            allow_loopback: false,
+        }
+    }
+}
+
+/// Syscall anomaly detection configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SyscallAnomalyConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub strict_mode: bool,
+    #[serde(default = "default_true")]
+    pub alert_on_unknown_syscall: bool,
+    #[serde(default = "default_syscall_anomaly_max_denied_events_per_minute")]
+    pub max_denied_events_per_minute: u32,
+    #[serde(default = "default_syscall_anomaly_max_total_events_per_minute")]
+    pub max_total_events_per_minute: u32,
+    #[serde(default = "default_syscall_anomaly_max_alerts_per_minute")]
+    pub max_alerts_per_minute: u32,
+    #[serde(default = "default_syscall_anomaly_alert_cooldown_secs")]
+    pub alert_cooldown_secs: u64,
+    #[serde(default = "default_syscall_anomaly_log_path")]
+    pub log_path: String,
+    #[serde(default = "default_syscall_anomaly_baseline_syscalls")]
+    pub baseline_syscalls: Vec<String>,
+}
+
+fn default_syscall_anomaly_max_denied_events_per_minute() -> u32 { 5 }
+fn default_syscall_anomaly_max_total_events_per_minute() -> u32 { 120 }
+fn default_syscall_anomaly_max_alerts_per_minute() -> u32 { 30 }
+fn default_syscall_anomaly_alert_cooldown_secs() -> u64 { 20 }
+fn default_syscall_anomaly_log_path() -> String { "syscall-anomalies.log".to_string() }
+fn default_syscall_anomaly_baseline_syscalls() -> Vec<String> {
+    vec![
+        "read".into(), "write".into(), "open".into(), "openat".into(),
+        "close".into(), "stat".into(), "fstat".into(), "newfstatat".into(),
+        "lseek".into(), "mmap".into(), "mprotect".into(), "munmap".into(),
+        "brk".into(), "rt_sigaction".into(), "rt_sigprocmask".into(),
+        "ioctl".into(), "fcntl".into(), "access".into(), "pipe2".into(),
+        "dup".into(), "dup2".into(), "dup3".into(),
+    ]
+}
+
+impl Default for SyscallAnomalyConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            strict_mode: false,
+            alert_on_unknown_syscall: true,
+            max_denied_events_per_minute: default_syscall_anomaly_max_denied_events_per_minute(),
+            max_total_events_per_minute: default_syscall_anomaly_max_total_events_per_minute(),
+            max_alerts_per_minute: default_syscall_anomaly_max_alerts_per_minute(),
+            alert_cooldown_secs: default_syscall_anomaly_alert_cooldown_secs(),
+            log_path: default_syscall_anomaly_log_path(),
+            baseline_syscalls: default_syscall_anomaly_baseline_syscalls(),
+        }
+    }
+}
+
+// ── Research phase ──────────────────────────────────────────────────
+
+/// Research phase trigger mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ResearchTrigger {
+    #[default]
+    Never,
+    Always,
+    Keywords,
+    Length,
+    Question,
+}
+
+/// Research phase configuration (`[research]` section).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ResearchPhaseConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub trigger: ResearchTrigger,
+    #[serde(default = "default_research_keywords")]
+    pub keywords: Vec<String>,
+    #[serde(default = "default_research_min_length")]
+    pub min_message_length: usize,
+    #[serde(default = "default_research_max_iterations")]
+    pub max_iterations: usize,
+    #[serde(default = "default_true")]
+    pub show_progress: bool,
+    #[serde(default)]
+    pub system_prompt_prefix: String,
+}
+
+fn default_research_keywords() -> Vec<String> {
+    vec![
+        "find".into(), "search".into(), "check".into(), "investigate".into(),
+        "look".into(), "research".into(),
+    ]
+}
+fn default_research_min_length() -> usize { 50 }
+fn default_research_max_iterations() -> usize { 5 }
+
+impl Default for ResearchPhaseConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            trigger: ResearchTrigger::default(),
+            keywords: default_research_keywords(),
+            min_message_length: default_research_min_length(),
+            max_iterations: default_research_max_iterations(),
+            show_progress: true,
+            system_prompt_prefix: String::new(),
+        }
+    }
+}
+
+// ── Coordination ────────────────────────────────────────────────────
+
+fn default_coordination_enabled() -> bool { true }
+fn default_coordination_lead_agent() -> String { "delegate-lead".into() }
+fn default_coordination_max_inbox_messages_per_agent() -> usize { 256 }
+fn default_coordination_max_dead_letters() -> usize { 256 }
+fn default_coordination_max_context_entries() -> usize { 512 }
+fn default_coordination_max_seen_message_ids() -> usize { 4096 }
+
+/// Delegate coordination runtime configuration (`[coordination]` section).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CoordinationConfig {
+    #[serde(default = "default_coordination_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_coordination_lead_agent")]
+    pub lead_agent: String,
+    #[serde(default = "default_coordination_max_inbox_messages_per_agent")]
+    pub max_inbox_messages_per_agent: usize,
+    #[serde(default = "default_coordination_max_dead_letters")]
+    pub max_dead_letters: usize,
+    #[serde(default = "default_coordination_max_context_entries")]
+    pub max_context_entries: usize,
+    #[serde(default = "default_coordination_max_seen_message_ids")]
+    pub max_seen_message_ids: usize,
+}
+
+impl Default for CoordinationConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_coordination_enabled(),
+            lead_agent: default_coordination_lead_agent(),
+            max_inbox_messages_per_agent: default_coordination_max_inbox_messages_per_agent(),
+            max_dead_letters: default_coordination_max_dead_letters(),
+            max_context_entries: default_coordination_max_context_entries(),
+            max_seen_message_ids: default_coordination_max_seen_message_ids(),
+        }
+    }
+}
+
+// ── Agents IPC ──────────────────────────────────────────────────────
+
+fn default_agents_ipc_db_path() -> String { "~/.snowclaw/agents.db".into() }
+fn default_agents_ipc_staleness_secs() -> u64 { 300 }
+
+/// Inter-process agent communication configuration (`[agents_ipc]` section).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AgentsIpcConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_agents_ipc_db_path")]
+    pub db_path: String,
+    #[serde(default = "default_agents_ipc_staleness_secs")]
+    pub staleness_secs: u64,
+}
+
+impl Default for AgentsIpcConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            db_path: default_agents_ipc_db_path(),
+            staleness_secs: default_agents_ipc_staleness_secs(),
+        }
+    }
+}
+
+// ── WASM ────────────────────────────────────────────────────────────
+
+fn default_wasm_memory_limit_mb() -> u64 { 64 }
+fn default_wasm_fuel_limit() -> u64 { 1_000_000_000 }
+fn default_registry_url() -> String { "https://zeromarket.vercel.app/api".to_string() }
+
+/// WASM plugin engine configuration (`[wasm]` section).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct WasmConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_wasm_memory_limit_mb")]
+    pub memory_limit_mb: u64,
+    #[serde(default = "default_wasm_fuel_limit")]
+    pub fuel_limit: u64,
+    #[serde(default = "default_registry_url")]
+    pub registry_url: String,
+}
+
+impl Default for WasmConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            memory_limit_mb: default_wasm_memory_limit_mb(),
+            fuel_limit: default_wasm_fuel_limit(),
+            registry_url: default_registry_url(),
+        }
+    }
+}
+
+/// How to handle invocation capabilities that exceed baseline runtime policy.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WasmCapabilityEscalationMode {
+    #[default]
+    Deny,
+    Clamp,
+}
+
+/// Integrity policy for WASM modules pinned by SHA-256 digest.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WasmModuleHashPolicy {
+    Disabled,
+    #[default]
+    Warn,
+    Enforce,
+}
+
+fn default_wasm_tools_dir() -> String { "tools/wasm".into() }
+fn default_runtime_wasm_fuel_limit() -> u64 { 1_000_000 }
+fn default_runtime_wasm_memory_limit_mb() -> u64 { 64 }
+fn default_wasm_max_module_size_mb() -> u64 { 50 }
+
+/// WASM runtime configuration (`[runtime.wasm]` section).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct WasmRuntimeConfig {
+    #[serde(default = "default_wasm_tools_dir")]
+    pub tools_dir: String,
+    #[serde(default = "default_runtime_wasm_fuel_limit")]
+    pub fuel_limit: u64,
+    #[serde(default = "default_runtime_wasm_memory_limit_mb")]
+    pub memory_limit_mb: u64,
+    #[serde(default = "default_wasm_max_module_size_mb")]
+    pub max_module_size_mb: u64,
+    #[serde(default)]
+    pub allow_workspace_read: bool,
+    #[serde(default)]
+    pub allow_workspace_write: bool,
+    #[serde(default)]
+    pub allowed_hosts: Vec<String>,
+    #[serde(default)]
+    pub security: WasmSecurityConfig,
+}
+
+impl Default for WasmRuntimeConfig {
+    fn default() -> Self {
+        Self {
+            tools_dir: default_wasm_tools_dir(),
+            fuel_limit: default_runtime_wasm_fuel_limit(),
+            memory_limit_mb: default_runtime_wasm_memory_limit_mb(),
+            max_module_size_mb: default_wasm_max_module_size_mb(),
+            allow_workspace_read: false,
+            allow_workspace_write: false,
+            allowed_hosts: Vec::new(),
+            security: WasmSecurityConfig::default(),
+        }
+    }
+}
+
+/// Security policy controls for WASM runtime hardening.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct WasmSecurityConfig {
+    #[serde(default = "default_true")]
+    pub require_workspace_relative_tools_dir: bool,
+    #[serde(default = "default_true")]
+    pub reject_symlink_modules: bool,
+    #[serde(default = "default_true")]
+    pub reject_symlink_tools_dir: bool,
+    #[serde(default = "default_true")]
+    pub strict_host_validation: bool,
+    #[serde(default)]
+    pub capability_escalation_mode: WasmCapabilityEscalationMode,
+    #[serde(default)]
+    pub module_hash_policy: WasmModuleHashPolicy,
+    #[serde(default)]
+    pub module_sha256: BTreeMap<String, String>,
+}
+
+impl Default for WasmSecurityConfig {
+    fn default() -> Self {
+        Self {
+            require_workspace_relative_tools_dir: true,
+            reject_symlink_modules: true,
+            reject_symlink_tools_dir: true,
+            strict_host_validation: true,
+            capability_escalation_mode: WasmCapabilityEscalationMode::default(),
+            module_hash_policy: WasmModuleHashPolicy::default(),
+            module_sha256: BTreeMap::new(),
+        }
+    }
+}
+
+// ── Plugins ─────────────────────────────────────────────────────────
+
+fn default_plugins_enabled() -> bool { true }
+
+/// Plugin system configuration (`[plugins]` section).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PluginsConfig {
+    #[serde(default = "default_plugins_enabled")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub allow: Vec<String>,
+    #[serde(default)]
+    pub deny: Vec<String>,
+    #[serde(default)]
+    pub load_paths: Vec<String>,
+    #[serde(default)]
+    pub entries: std::collections::HashMap<String, PluginEntryConfig>,
+}
+
+impl Default for PluginsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_plugins_enabled(),
+            allow: Vec::new(),
+            deny: Vec::new(),
+            load_paths: Vec::new(),
+            entries: std::collections::HashMap::new(),
+        }
+    }
+}
+
+/// Per-plugin configuration entry.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PluginEntryConfig {
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub config: serde_json::Value,
+}
+
+impl Default for PluginEntryConfig {
+    fn default() -> Self {
+        Self {
+            enabled: None,
+            config: serde_json::Value::Null,
+        }
+    }
+}
+
+// ── Goal loop ───────────────────────────────────────────────────────
+
+/// Configuration for the autonomous goal loop engine (`[goal_loop]`).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct GoalLoopConfig {
+    pub enabled: bool,
+    pub interval_minutes: u32,
+    pub step_timeout_secs: u64,
+    pub max_steps_per_cycle: u32,
+    #[serde(default)]
+    pub channel: Option<String>,
+    #[serde(default)]
+    pub target: Option<String>,
+}
+
+impl Default for GoalLoopConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            interval_minutes: 10,
+            step_timeout_secs: 120,
+            max_steps_per_cycle: 3,
+            channel: None,
+            target: None,
+        }
+    }
+}
+
+// ── User-Agent default ──────────────────────────────────────────────
+
+fn default_user_agent() -> String {
+    "ZeroClaw/1.0".into()
+}
+
+// ── Web fetch provider default ──────────────────────────────────────
+
+fn default_web_fetch_provider() -> String {
+    "fast_html2md".into()
+}
+
 // ── Config impl ──────────────────────────────────────────────────
 
 impl Default for Config {
@@ -3771,6 +4650,15 @@ impl Default for Config {
             query_classification: QueryClassificationConfig::default(),
             transcription: TranscriptionConfig::default(),
             mcp: McpConfig::default(),
+            provider: ProviderConfig::default(),
+            provider_api: None,
+            model_support_vision: None,
+            coordination: CoordinationConfig::default(),
+            agents_ipc: AgentsIpcConfig::default(),
+            research: ResearchPhaseConfig::default(),
+            wasm: WasmConfig::default(),
+            plugins: PluginsConfig::default(),
+            goal_loop: GoalLoopConfig::default(),
         }
     }
 }
@@ -4148,6 +5036,64 @@ fn read_codex_openai_api_key() -> Option<String> {
 }
 
 impl Config {
+    fn normalize_reasoning_level_override(raw: Option<&str>, source: &str) -> Option<String> {
+        let value = raw?.trim();
+        if value.is_empty() {
+            return None;
+        }
+        let normalized = value.to_ascii_lowercase().replace(['-', '_'], "");
+        match normalized.as_str() {
+            "minimal" | "low" | "medium" | "high" | "xhigh" => Some(normalized),
+            _ => {
+                tracing::warn!(
+                    reasoning_level = %value,
+                    source,
+                    "Ignoring invalid reasoning level override"
+                );
+                None
+            }
+        }
+    }
+
+    /// Resolve provider reasoning level with backward-compatible runtime alias.
+    pub fn effective_provider_reasoning_level(&self) -> Option<String> {
+        let provider_level = Self::normalize_reasoning_level_override(
+            self.provider.reasoning_level.as_deref(),
+            "provider.reasoning_level",
+        );
+        let runtime_level = Self::normalize_reasoning_level_override(
+            self.runtime.reasoning_level.as_deref(),
+            "runtime.reasoning_level",
+        );
+
+        match (provider_level, runtime_level) {
+            (Some(provider_level), Some(runtime_level)) => {
+                if provider_level == runtime_level {
+                    tracing::warn!(
+                        reasoning_level = %provider_level,
+                        "`runtime.reasoning_level` is deprecated; keep only `provider.reasoning_level`"
+                    );
+                } else {
+                    tracing::warn!(
+                        provider_reasoning_level = %provider_level,
+                        runtime_reasoning_level = %runtime_level,
+                        "`runtime.reasoning_level` is deprecated and ignored when `provider.reasoning_level` is set"
+                    );
+                }
+                Some(provider_level)
+            }
+            (Some(provider_level), None) => Some(provider_level),
+            (None, Some(runtime_level)) => {
+                tracing::warn!(
+                    reasoning_level = %runtime_level,
+                    "`runtime.reasoning_level` is deprecated; using it as compatibility fallback to `provider.reasoning_level`"
+                );
+                Some(runtime_level)
+            }
+            (None, None) => None,
+        }
+    }
+
     pub async fn load_or_init() -> Result<Self> {
         let (default_zeroclaw_dir, default_workspace_dir) = default_config_and_workspace_dirs()?;
 

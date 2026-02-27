@@ -471,10 +471,10 @@ async fn run_agentic_background(
 
     match result {
         Ok(Ok(response)) => {
-            let rendered = if response.trim().is_empty() {
+            let rendered = if response.text.trim().is_empty() {
                 "[Empty response]".to_string()
             } else {
-                response
+                response.text
             };
 
             Ok(ToolResult {

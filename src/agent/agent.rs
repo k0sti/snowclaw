@@ -305,29 +305,34 @@ impl Agent {
                 let result: Option<anyhow::Result<mcp::McpLocalBridge>> =
                     tokio::task::block_in_place(|| {
                         handle.block_on(async {
-                            if server_entry.transport == "sse" {
-                                if let Some(url) = &server_entry.url {
-                                    let sse_cfg = mcp::local::McpSseConfig {
-                                        name: server_entry.name.clone(),
-                                        url: url.clone(),
-                                    };
-                                    Some(mcp::McpLocalBridge::from_sse(&sse_cfg).await)
-                                } else {
-                                    tracing::warn!(server = %server_entry.name, "MCP SSE server missing 'url'");
-                                    None
+                            match server_entry.transport {
+                                crate::config::schema::McpTransport::Sse | crate::config::schema::McpTransport::Http => {
+                                    if let Some(ref url) = server_entry.url {
+                                        let sse_cfg = mcp::local::McpSseConfig {
+                                            name: server_entry.name.clone(),
+                                            url: url.clone(),
+                                        };
+                                        Some(mcp::McpLocalBridge::from_sse(&sse_cfg).await)
+                                    } else {
+                                        tracing::warn!(server = %server_entry.name, "MCP SSE/HTTP server missing 'url'");
+                                        None
+                                    }
                                 }
-                            } else if let Some(command) = &server_entry.command {
-                                let stdio_cfg = mcp::local::McpServerConfig {
-                                    name: server_entry.name.clone(),
-                                    command: command.clone(),
-                                    args: server_entry.args.clone(),
-                                    env: server_entry.env.clone(),
-                                    working_dir: server_entry.working_dir.as_ref().map(std::path::PathBuf::from),
-                                };
-                                Some(mcp::McpLocalBridge::from_stdio(&stdio_cfg).await)
-                            } else {
-                                tracing::warn!(server = %server_entry.name, "MCP stdio server missing 'command'");
-                                None
+                                crate::config::schema::McpTransport::Stdio => {
+                                    if server_entry.command.is_empty() {
+                                        tracing::warn!(server = %server_entry.name, "MCP stdio server missing 'command'");
+                                        None
+                                    } else {
+                                        let stdio_cfg = mcp::local::McpServerConfig {
+                                            name: server_entry.name.clone(),
+                                            command: server_entry.command.clone(),
+                                            args: server_entry.args.clone(),
+                                            env: server_entry.env.clone(),
+                                            working_dir: None,
+                                        };
+                                        Some(mcp::McpLocalBridge::from_stdio(&stdio_cfg).await)
+                                    }
+                                }
                             }
                         })
                     });

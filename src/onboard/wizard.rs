@@ -190,7 +190,16 @@ pub async fn run_wizard() -> Result<Config> {
         hooks: crate::config::HooksConfig::default(),
         security: crate::config::SecurityConfig::default(),
         transcription: crate::config::TranscriptionConfig::default(),
-            mcp: crate::config::McpConfig::default(),
+        mcp: crate::config::McpConfig::default(),
+        provider: crate::config::ProviderConfig::default(),
+        provider_api: None,
+        model_support_vision: None,
+        coordination: crate::config::CoordinationConfig::default(),
+        agents_ipc: crate::config::AgentsIpcConfig::default(),
+        research: crate::config::ResearchPhaseConfig::default(),
+        wasm: crate::config::WasmConfig::default(),
+        plugins: crate::config::PluginsConfig::default(),
+        goal_loop: crate::config::schema::GoalLoopConfig::default(),
     };
 
     println!(
@@ -347,6 +356,8 @@ pub async fn run_quick_setup(
     provider: Option<&str>,
     model_override: Option<&str>,
     memory_backend: Option<&str>,
+    _force: bool,
+    _no_totp: bool,
 ) -> Result<Config> {
     let home = directories::UserDirs::new()
         .map(|u| u.home_dir().to_path_buf())
@@ -445,7 +456,16 @@ async fn run_quick_setup_with_home(
         hooks: crate::config::HooksConfig::default(),
         security: crate::config::SecurityConfig::default(),
         transcription: crate::config::TranscriptionConfig::default(),
-            mcp: crate::config::McpConfig::default(),
+        mcp: crate::config::McpConfig::default(),
+        provider: crate::config::ProviderConfig::default(),
+        provider_api: None,
+        model_support_vision: None,
+        coordination: crate::config::CoordinationConfig::default(),
+        agents_ipc: crate::config::AgentsIpcConfig::default(),
+        research: crate::config::ResearchPhaseConfig::default(),
+        wasm: crate::config::WasmConfig::default(),
+        plugins: crate::config::PluginsConfig::default(),
+        goal_loop: crate::config::schema::GoalLoopConfig::default(),
     };
 
     config.save().await?;
@@ -3285,6 +3305,8 @@ fn setup_channels() -> Result<ChannelsConfig> {
                     draft_update_interval_ms: 1000,
                     interrupt_on_new_message: false,
                     mention_only: false,
+                    group_reply: None,
+                    base_url: None,
                 });
             }
             ChannelMenuChoice::Discord => {
@@ -3384,6 +3406,7 @@ fn setup_channels() -> Result<ChannelsConfig> {
                     allowed_users,
                     listen_to_bots: false,
                     mention_only: false,
+                    group_reply: None,
                 });
             }
             ChannelMenuChoice::Slack => {
@@ -3509,6 +3532,7 @@ fn setup_channels() -> Result<ChannelsConfig> {
                         Some(channel)
                     },
                     allowed_users,
+                    group_reply: None,
                 });
             }
             ChannelMenuChoice::IMessage => {
@@ -4254,6 +4278,8 @@ fn setup_channels() -> Result<ChannelsConfig> {
                     app_id,
                     app_secret,
                     allowed_users,
+                    receive_mode: crate::config::schema::QQReceiveMode::default(),
+                    environment: crate::config::schema::QQEnvironment::default(),
                 });
             }
             ChannelMenuChoice::Lark | ChannelMenuChoice::Feishu => {

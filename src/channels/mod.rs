@@ -3264,7 +3264,7 @@ or tune thresholds in config.",
     let history_len_before_tools = history.len();
 
     enum LlmExecutionResult {
-        Completed(Result<Result<String, anyhow::Error>, tokio::time::error::Elapsed>),
+        Completed(Result<Result<crate::agent::loop_::ToolLoopResult, anyhow::Error>, tokio::time::error::Elapsed>),
         Cancelled,
     }
 
@@ -3386,9 +3386,9 @@ or tune thresholds in config.",
                 }
             }
         }
-        LlmExecutionResult::Completed(Ok(Ok(response))) => {
+        LlmExecutionResult::Completed(Ok(Ok(loop_result))) => {
             // ── Hook: on_message_sending (modifying) ─────────
-            let mut outbound_response = response;
+            let mut outbound_response = loop_result.text;
             if let Some(hooks) = &ctx.hooks {
                 match hooks
                     .run_on_message_sending(
