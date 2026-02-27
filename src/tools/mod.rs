@@ -72,6 +72,7 @@ pub mod wasm_module;
 pub mod wasm_tool;
 pub mod web_fetch;
 pub mod nostr_tasks;
+mod snowclaw_tools;
 pub mod web_search_tool;
 
 pub use apply_patch::ApplyPatchTool;
@@ -288,20 +289,14 @@ pub fn all_tools_with_runtime(
             security.clone(),
             workspace_dir.to_path_buf(),
         )),
-        Arc::new(NostrTaskTool::new(security.clone(), workspace_dir)),
-        Arc::new(SocialSearchTool::new(
-            root_config
-                .config_path
-                .parent()
-                .unwrap_or(std::path::Path::new(".")),
-        )),
-        Arc::new(AgentLessonTool::new(
-            root_config
-                .config_path
-                .parent()
-                .unwrap_or(std::path::Path::new(".")),
-        )),
     ];
+
+    // Snowclaw-specific tools
+    let config_dir = root_config
+        .config_path
+        .parent()
+        .unwrap_or(std::path::Path::new("."));
+    snowclaw_tools::register_snowclaw_tools(&mut tool_arcs, &security, workspace_dir, config_dir);
 
     if has_shell_access {
         tool_arcs.push(Arc::new(ShellTool::new_with_syscall_detector(

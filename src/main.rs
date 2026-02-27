@@ -86,6 +86,7 @@ mod skillforge;
 mod mcp;
 mod skills;
 mod task_cli;
+mod snowclaw_cli;
 mod tools;
 mod tunnel;
 mod update;
@@ -1089,22 +1090,7 @@ async fn main() -> Result<()> {
             room,
             json,
             live,
-        } => {
-            if live {
-                return stats::tui::run(&config.workspace_dir);
-            }
-            let jsonl_path = stats::costs_jsonl_path(&config.workspace_dir);
-            let records = stats::read_records(&jsonl_path)?;
-            let filter =
-                stats::build_filter(date.as_deref(), period.as_deref(), room)?;
-            let result = stats::aggregate(&records, &filter);
-            if json {
-                stats::print_stats_json(&result)?;
-            } else {
-                stats::print_stats(&result);
-            }
-            Ok(())
-        }
+        } => snowclaw_cli::handle_stats(&config, date, period, room, json, live),
 
         Commands::Estop {
             estop_command,
