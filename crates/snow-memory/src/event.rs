@@ -281,6 +281,61 @@ pub fn profile_from_metadata(json: &str) -> Result<AgentProfile, ConversionError
     })
 }
 
+/// Parse a raw JSON Nostr event (as serde_json::Value) into a Memory.
+/// Returns None if it's not a valid snow: memory event.
+pub fn event_json_to_memory(event: &serde_json::Value) -> Option<Memory> {
+    let kind = event.get("kind")?.as_u64()?;
+    if kind != KIND_APP_SPECIFIC {
+        return None;
+    }
+
+    let id = event.get("id")?.as_str()?.to_string();
+    let pubkey = event.get("pubkey")?.as_str()?.to_string();
+    let created_at = event.get("created_at")?.as_u64()?;
+    let content = event.get("content")?.as_str()?.to_string();
+    let tags_arr = event.get("tags")?.as_array()?;
+
+    // Convert JSON tags array to our tuple format
+    let tags: Vec<(String, String)> = tags_arr
+        .iter()
+        .filter_map(|t| {
+            let arr = t.as_array()?;
+            let key = arr.first()?.as_str()?.to_string();
+            let val = arr.get(1)?.as_str()?.to_string();
+            Some((key, val))
+        })
+        .collect();
+
+    let mem_event = MemoryEvent {
+        id,
+        kind,
+        pubkey,
+        created_at,
+        tags,
+        content,
+    };
+
+    memory_from_event(&mem_event).ok()
+}
+
+/// Convert an AgentProfile to a MemoryEvent (kind 0).
+pub fn profile_to_event(profile: &AgentProfile, pubkey: &str) -> MemoryEvent {
+    let content = profile_to_metadata(profile);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    MemoryEvent {
+        id: String::new(), // computed by caller after signing
+        kind: KIND_METADATA,
+        pubkey: pubkey.to_string(),
+        created_at: now,
+        tags: vec![],
+        content,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
