@@ -97,6 +97,13 @@ impl SqliteMemoryIndex {
         tier_filter: Option<&str>,
         limit: usize,
     ) -> SqlResult<Vec<(Memory, f64)>> {
+        // Sanitize query for FTS5: quote each word to avoid special char issues (e.g. hyphens)
+        let fts_query: String = query
+            .split_whitespace()
+            .map(|w| format!("\"{}\"", w.replace('"', "")))
+            .collect::<Vec<_>>()
+            .join(" ");
+
         let tier_pattern = tier_filter.map(|t| format!("{}%", t));
 
         let (sql, use_tier) = if tier_pattern.is_some() {
@@ -124,14 +131,14 @@ impl SqliteMemoryIndex {
 
         if use_tier {
             let tp = tier_pattern.as_deref().unwrap_or("");
-            let mut rows = stmt.query(params![query, tp, limit as i64])?;
+            let mut rows = stmt.query(params![fts_query, tp, limit as i64])?;
             while let Some(row) = rows.next()? {
                 if let Ok(mr) = Self::row_to_memory_rank(row) {
                     results.push(mr);
                 }
             }
         } else {
-            let mut rows = stmt.query(params![query, limit as i64])?;
+            let mut rows = stmt.query(params![fts_query, limit as i64])?;
             while let Some(row) = rows.next()? {
                 if let Ok(mr) = Self::row_to_memory_rank(row) {
                     results.push(mr);

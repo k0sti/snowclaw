@@ -2039,7 +2039,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a1c3cc8e57274ec99de65301228b537f1e4eedc1b8e0f9411c6caac8ae7308f"
 dependencies = [
  "log",
- "regex",
 ]
 
 [[package]]
@@ -2054,10 +2053,7 @@ version = "0.11.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b2daee4ea451f429a58296525ddf28b45a3b64f1acf6587e2067437bb11e218d"
 dependencies = [
- "anstream",
- "anstyle",
  "env_filter",
- "jiff",
  "log",
 ]
 
@@ -3383,30 +3379,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4a1354c92c91fd5595fd4cc46694b6914749cc90ea437246549c26b6ff0ec6d1"
 dependencies = [
  "serde",
-]
-
-[[package]]
-name = "jiff"
-version = "0.2.21"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b3e3d65f018c6ae946ab16e80944b97096ed73c35b221d1c478a6c81d8f57940"
-dependencies = [
- "jiff-static",
- "log",
- "portable-atomic",
- "portable-atomic-util",
- "serde_core",
-]
-
-[[package]]
-name = "jiff-static"
-version = "0.2.21"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a17c2b211d863c7fde02cbea8a3c1a439b98e109286554f2860bdded7ff83818"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.116",
 ]
 
 [[package]]
@@ -5010,15 +4982,6 @@ name = "portable-atomic"
 version = "1.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c33a9471896f1c69cecef8d20cbe2f7accd12527ce60845ff44c153bb2a21b49"
-
-[[package]]
-name = "portable-atomic-util"
-version = "0.2.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7a9db96d7fa8782dd8c15ce32ffe8680bbd1e978a43bf51a34d39483540495f5"
-dependencies = [
- "portable-atomic",
-]
 
 [[package]]
 name = "postcard"
@@ -6636,27 +6599,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "snow-listen"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "clap",
- "env_logger",
- "hex",
- "log",
- "rand 0.8.5",
- "secp256k1",
- "serde",
- "serde_json",
- "sha2",
- "tokio",
- "toml 1.0.3+spec-1.1.0",
- "tungstenite 0.24.0",
- "url",
-]
-
-[[package]]
 name = "snow-memory"
 version = "0.1.0"
 dependencies = [
@@ -7092,7 +7034,6 @@ dependencies = [
  "bytes",
  "libc",
  "mio",
- "parking_lot",
  "pin-project-lite",
  "signal-hook-registry",
  "socket2",
@@ -7504,24 +7445,6 @@ name = "ttf-parser"
 version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2df906b07856748fa3f6e0ad0cbaa047052d4a7dd609e231c4f72cee8c36f31"
-
-[[package]]
-name = "tungstenite"
-version = "0.24.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "18e5b8366ee7a95b16d32197d0b2604b43a0be89dc5fac9f8e96ccafbaedda8a"
-dependencies = [
- "byteorder",
- "bytes",
- "data-encoding",
- "http 1.4.0",
- "httparse",
- "log",
- "rand 0.8.5",
- "sha1",
- "thiserror 1.0.69",
- "utf-8",
-]
 
 [[package]]
 name = "tungstenite"
