@@ -1,4 +1,5 @@
 use super::traits::{Tool, ToolResult};
+use crate::memory::snowclaw_ext::SnowclawMemoryExt;
 use crate::memory::{Memory, MemoryCategory};
 use crate::security::policy::ToolOperation;
 use crate::security::SecurityPolicy;

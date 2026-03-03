@@ -19,7 +19,7 @@ use tracing::{debug, info, warn};
 
 use super::embeddings::EmbeddingProvider;
 use super::sqlite::SqliteMemory;
-use super::traits::{Memory, MemoryCategory, MemoryEntry, RecallContext};
+use super::traits::{Memory, MemoryCategory, MemoryEntry};
 
 /// Composite Nostr+SQLite memory backend.
 ///
@@ -368,12 +368,11 @@ impl Memory for NostrSqliteMemory {
         query: &str,
         limit: usize,
         session_id: Option<&str>,
-        _context: Option<&RecallContext>,
     ) -> Result<Vec<MemoryEntry>> {
         self.ensure_synced().await;
 
         // Always query SQLite — it has hybrid search (vector + FTS5)
-        self.sqlite.recall(query, limit, session_id, None).await
+        self.sqlite.recall(query, limit, session_id).await
     }
 
     async fn get(&self, key: &str) -> Result<Option<MemoryEntry>> {
@@ -549,7 +548,7 @@ mod tests {
             .await
             .unwrap();
 
-        let results = mem.recall("Rust", 10, None, None).await.unwrap();
+        let results = mem.recall("Rust", 10, None).await.unwrap();
         assert!(!results.is_empty());
         assert!(results.iter().any(|r| r.key == "lang"));
     }

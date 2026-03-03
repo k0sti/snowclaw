@@ -1,4 +1,4 @@
-use super::traits::{Memory, MemoryCategory, MemoryEntry, RecallContext};
+use super::traits::{Memory, MemoryCategory, MemoryEntry};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -291,7 +291,6 @@ impl Memory for PostgresMemory {
         query: &str,
         limit: usize,
         session_id: Option<&str>,
-        _context: Option<&RecallContext>,
     ) -> Result<Vec<MemoryEntry>> {
         let client = self.client.clone();
         let qualified_table = self.qualified_table.clone();

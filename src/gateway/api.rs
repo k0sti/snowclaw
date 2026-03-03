@@ -756,7 +756,7 @@ pub async fn handle_api_memory_list(
 
     if let Some(ref query) = params.query {
         // Search mode
-        match state.mem.recall(query, 50, None, None).await {
+        match state.mem.recall(query, 50, None).await {
             Ok(entries) => Json(serde_json::json!({"entries": entries})).into_response(),
             Err(e) => (
                 StatusCode::INTERNAL_SERVER_ERROR,

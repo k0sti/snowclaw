@@ -13,7 +13,7 @@ use std::time::Duration;
 use tokio::sync::{OnceCell, RwLock};
 use tracing::{debug, info, warn};
 
-use super::traits::{Memory, MemoryCategory, MemoryEntry, RecallContext};
+use super::traits::{Memory, MemoryCategory, MemoryEntry};
 
 /// Local JSON cache for offline fallback.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
@@ -330,7 +330,6 @@ impl Memory for NostrMemory {
         query: &str,
         limit: usize,
         session_id: Option<&str>,
-        _context: Option<&RecallContext>,
     ) -> Result<Vec<MemoryEntry>> {
         let query_lower = query.to_lowercase();
 
@@ -559,7 +558,7 @@ mod tests {
             .await
             .unwrap();
 
-        let results = mem.recall("rust", 10, None, None).await.unwrap();
+        let results = mem.recall("rust", 10, None).await.unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].key, "lang");
         assert!(results[0].content.contains("Rust"));

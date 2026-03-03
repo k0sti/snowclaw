@@ -2,7 +2,7 @@
 
 use crate::config::MemoryConfig;
 use crate::ranking::rank_memories;
-use crate::types::{Memory, MemoryTier, SearchResult, SourcePreference};
+use crate::types::{Memory, MemoryTier, SearchResult};
 use rusqlite::{params, Connection, Result as SqlResult};
 use std::path::Path;
 

@@ -1,5 +1,5 @@
 use super::sqlite::SqliteMemory;
-use super::traits::{Memory, MemoryCategory, MemoryEntry, RecallContext};
+use super::traits::{Memory, MemoryCategory, MemoryEntry};
 use async_trait::async_trait;
 use chrono::Local;
 use parking_lot::Mutex;
@@ -332,9 +332,8 @@ impl Memory for LucidMemory {
         query: &str,
         limit: usize,
         session_id: Option<&str>,
-        _context: Option<&RecallContext>,
     ) -> anyhow::Result<Vec<MemoryEntry>> {
-        let local_results = self.local.recall(query, limit, session_id, None).await?;
+        let local_results = self.local.recall(query, limit, session_id).await?;
         if limit == 0
             || local_results.len() >= limit
             || local_results.len() >= self.local_hit_threshold
@@ -549,7 +548,7 @@ exit 1
             .await
             .unwrap();
 
-        let entries = memory.recall("auth", 5, None, None).await.unwrap();
+        let entries = memory.recall("auth", 5, None).await.unwrap();
 
         assert!(entries
             .iter()
@@ -573,7 +572,7 @@ exit 1
             .await
             .unwrap();
 
-        let entries = memory.recall("auth", 5, None, None).await.unwrap();
+        let entries = memory.recall("auth", 5, None).await.unwrap();
 
         assert!(entries
             .iter()
@@ -611,7 +610,7 @@ exit 1
             .await
             .unwrap();
 
-        let entries = memory.recall("rust", 5, None, None).await.unwrap();
+        let entries = memory.recall("rust", 5, None).await.unwrap();
         assert!(entries
             .iter()
             .any(|e| e.content.contains("Rust should stay local-first")));
@@ -671,8 +670,8 @@ exit 1
             Duration::from_secs(5),
         );
 
-        let first = memory.recall("auth", 5, None, None).await.unwrap();
-        let second = memory.recall("auth", 5, None, None).await.unwrap();
+        let first = memory.recall("auth", 5, None).await.unwrap();
+        let second = memory.recall("auth", 5, None).await.unwrap();
 
         assert!(first.is_empty());
         assert!(second.is_empty());

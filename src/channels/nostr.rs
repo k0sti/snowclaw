@@ -20,7 +20,7 @@ use tracing::{debug, error, info, warn};
 use super::nostr_memory::NostrMemory;
 use super::seen_events::{DmHistoryMessage, SeenEventsStore};
 use super::traits::{Channel, ChannelMessage, SendMessage};
-use crate::memory::message_index::{self, IndexDecision, IndexableMessage};
+use crate::memory::message_index;
 use nostr_core::key_filter::{self, KeyFilter};
 
 /// Default capacity for the LRU event cache.
@@ -408,7 +408,7 @@ impl NostrChannel {
         }
 
         let since = Timestamp::from(
-            Timestamp::now().as_u64().saturating_sub(2 * 86400),
+            Timestamp::now().as_secs().saturating_sub(2 * 86400),
         );
         let filter = Filter::new()
             .kind(Kind::GiftWrap)
@@ -766,7 +766,7 @@ impl NostrChannel {
         // NIP-17 gift wraps have randomized created_at (±2 days) for privacy,
         // so we look back 2 days to catch them all. Deduplication via event cache.
         if self.config.listen_dms {
-            let two_days_ago = Timestamp::from(Timestamp::now().as_u64().saturating_sub(2 * 24 * 60 * 60));
+            let two_days_ago = Timestamp::from(Timestamp::now().as_secs().saturating_sub(2 * 24 * 60 * 60));
             let dm_filter = Filter::new()
                 .kinds(vec![Kind::GiftWrap, Kind::EncryptedDirectMessage])
                 .pubkey(self.config.keys.public_key())

@@ -12,7 +12,8 @@
 //! - Sync events from relay on startup via `sync_from_relay()`
 //! - Track `last_sync_timestamp` in the DB for incremental syncs
 
-use super::traits::{Memory, MemoryCategory, MemoryEntry, RecallContext};
+use super::snowclaw_ext::RecallContext;
+use super::traits::{Memory, MemoryCategory, MemoryEntry};
 use crate::config::snowclaw_schema::CollectiveMemoryConfig;
 use async_trait::async_trait;
 use nostr_sdk::nips::nip44;
@@ -607,6 +608,45 @@ impl CollectiveMemory {
         Ok(())
     }
 
+    /// Recall memories with tier-based context filtering.
+    ///
+    /// When `context` is provided, results are filtered by privacy tier:
+    /// - Main session: Public + Private + matching Group
+    /// - Group chat: Public + matching Group only
+    /// - Other: Public only
+    ///
+    /// When `context` is `None`, no filtering is applied.
+    pub async fn recall_with_context(
+        &self,
+        query: &str,
+        limit: usize,
+        _session_id: Option<&str>,
+        context: Option<&RecallContext>,
+    ) -> anyhow::Result<Vec<MemoryEntry>> {
+        let sm_config = self.config.to_snow_memory_config();
+        let idx = self.index.lock();
+
+        // Fetch extra results when filtering so we still return up to `limit` after filtering.
+        let fetch_limit = if context.is_some() { limit * 3 } else { limit };
+        let results = idx
+            .ranked_search(query, None, &sm_config, fetch_limit)
+            .map_err(|e| anyhow::anyhow!("collective recall failed: {e}"))?;
+
+        let entries: Vec<MemoryEntry> = results
+            .iter()
+            .filter(|r| {
+                match context {
+                    Some(ctx) => tier_visible_in_context(&r.memory.tier, ctx),
+                    None => true, // no context = no filtering
+                }
+            })
+            .take(limit)
+            .map(|r| snow_to_entry(&r.memory, Some(r.effective_score)))
+            .collect();
+
+        Ok(entries)
+    }
+
     /// Full resync: ignore last_sync_timestamp and fetch all events.
     pub async fn full_resync(&self) -> anyhow::Result<usize> {
         // Reset the timestamp so sync_from_relay fetches everything
@@ -1020,25 +1060,16 @@ impl Memory for CollectiveMemory {
         query: &str,
         limit: usize,
         _session_id: Option<&str>,
-        context: Option<&RecallContext>,
     ) -> anyhow::Result<Vec<MemoryEntry>> {
         let sm_config = self.config.to_snow_memory_config();
         let idx = self.index.lock();
 
-        // Fetch extra results when filtering so we still return up to `limit` after filtering.
-        let fetch_limit = if context.is_some() { limit * 3 } else { limit };
         let results = idx
-            .ranked_search(query, None, &sm_config, fetch_limit)
+            .ranked_search(query, None, &sm_config, limit)
             .map_err(|e| anyhow::anyhow!("collective recall failed: {e}"))?;
 
         let entries: Vec<MemoryEntry> = results
             .iter()
-            .filter(|r| {
-                match context {
-                    Some(ctx) => tier_visible_in_context(&r.memory.tier, ctx),
-                    None => true, // no context = no filtering
-                }
-            })
             .take(limit)
             .map(|r| snow_to_entry(&r.memory, Some(r.effective_score)))
             .collect();
@@ -1087,14 +1118,11 @@ impl Memory for CollectiveMemory {
             .map_err(|e| anyhow::anyhow!("collective count failed: {e}"))
     }
 
-    async fn promote(&self, key: &str, new_tier: MemoryTier) -> anyhow::Result<()> {
-        CollectiveMemory::promote(self, key, new_tier).await
-    }
-
     async fn health_check(&self) -> bool {
         self.index.lock().count().is_ok()
     }
 }
+
 
 #[cfg(test)]
 mod tests {
@@ -1148,7 +1176,7 @@ mod tests {
         .await
         .unwrap();
 
-        let results = mem.recall("error handling", 10, None, None).await.unwrap();
+        let results = mem.recall("error handling", 10, None).await.unwrap();
         assert!(!results.is_empty());
         assert_eq!(results[0].key, "rust/errors");
         assert!(results[0].score.unwrap() > 0.0);

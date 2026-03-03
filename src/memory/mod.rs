@@ -21,6 +21,8 @@ pub mod qdrant;
 pub mod response_cache;
 pub mod retrieval;
 pub mod snapshot;
+pub mod snowclaw_backends;
+pub mod snowclaw_ext;
 pub mod social;
 pub mod sqlite;
 pub mod traits;
@@ -29,15 +31,24 @@ pub mod vector;
 
 #[allow(unused_imports)]
 pub use backend::{
-    classify_memory_backend, default_memory_backend_key, memory_backend_profile,
+    classify_memory_backend, default_memory_backend_key,
     selectable_memory_backends, MemoryBackendKind, MemoryBackendProfile,
 };
+
+/// Backend profile lookup that checks snowclaw-specific backends first,
+/// then falls back to upstream profiles.
+pub fn memory_backend_profile(backend: &str) -> MemoryBackendProfile {
+    if let Some(profile) = snowclaw_backends::snowclaw_backend_profile(backend) {
+        return profile;
+    }
+    backend::memory_backend_profile(backend)
+}
+
 pub use cortex::CortexMemMemory;
 pub use hybrid::SqliteQdrantHybridMemory;
 pub use lucid::LucidMemory;
 pub use markdown::MarkdownMemory;
 pub use none::NoneMemory;
-pub use nostr::NostrMemory;
 pub use collective::CollectiveMemory;
 pub use nostr_sqlite::NostrSqliteMemory;
 #[cfg(feature = "memory-postgres")]
@@ -47,7 +58,8 @@ pub use response_cache::ResponseCache;
 pub use sqlite::SqliteMemory;
 pub use traits::Memory;
 #[allow(unused_imports)]
-pub use traits::{MemoryCategory, MemoryEntry, RecallContext};
+pub use snowclaw_ext::{RecallContext, SnowclawMemoryExt};
+pub use traits::{MemoryCategory, MemoryEntry};
 
 use crate::config::{EmbeddingRouteConfig, MemoryConfig, StorageProviderConfig};
 use anyhow::Context;
@@ -80,10 +92,6 @@ where
         MemoryBackendKind::Postgres => postgres_builder(),
         MemoryBackendKind::Qdrant | MemoryBackendKind::Markdown => {
             Ok(Box::new(MarkdownMemory::new(workspace_dir)))
-        }
-        MemoryBackendKind::Nostr => Ok(Box::new(NostrMemory::local_only(workspace_dir))),
-        MemoryBackendKind::Collective => {
-            anyhow::bail!("collective backend must be created via create_memory_with_storage_and_routes")
         }
         MemoryBackendKind::None => Ok(Box::new(NoneMemory::new())),
         MemoryBackendKind::Unknown => {
@@ -391,8 +399,9 @@ pub fn create_memory_with_storage_and_routes(
         return Ok(Box::new(SqliteQdrantHybridMemory::new(sqlite, qdrant)));
     }
 
+    // --- snowclaw backends ---
     // Nostr backend: composite Nostr+SQLite for relay persistence + local semantic search.
-    if matches!(backend_kind, MemoryBackendKind::Nostr) {
+    if matches!(snowclaw_backends::classify(&backend_name), snowclaw_backends::SnowclawBackendKind::Nostr) {
         let nsec = config.nsec.clone().or_else(|| std::env::var("SNOWCLAW_NSEC").ok());
 
         let embedder: Arc<dyn embeddings::EmbeddingProvider> =
@@ -420,7 +429,7 @@ pub fn create_memory_with_storage_and_routes(
     }
 
     // Collective memory: snow-memory FTS5 index with trust-ranked search.
-    if matches!(backend_kind, MemoryBackendKind::Collective) {
+    if matches!(snowclaw_backends::classify(&backend_name), snowclaw_backends::SnowclawBackendKind::Collective) {
         let nsec = config.nsec.clone().or_else(|| std::env::var("SNOWCLAW_NSEC").ok());
         let mem = CollectiveMemory::new_with_relay(
             workspace_dir,

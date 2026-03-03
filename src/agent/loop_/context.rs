@@ -148,7 +148,6 @@ mod tests {
             _query: &str,
             _limit: usize,
             _session_id: Option<&str>,
-            _context: Option<&crate::memory::RecallContext>,
         ) -> anyhow::Result<Vec<MemoryEntry>> {
             Ok(self.entries.as_ref().clone())
         }

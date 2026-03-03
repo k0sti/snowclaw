@@ -9,7 +9,7 @@ use directories::UserDirs;
 pub use crate::config::snowclaw_schema::APP_DIR_NAME;
 pub use crate::config::snowclaw_schema::ContextVmEntry;
 pub use crate::config::snowclaw_schema::CollectiveMemoryConfig;
-pub use crate::config::snowclaw_schema::McpServerEntry;
+
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};

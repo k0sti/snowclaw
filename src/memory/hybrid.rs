@@ -1,4 +1,4 @@
-use super::traits::{Memory, MemoryCategory, MemoryEntry, RecallContext};
+use super::traits::{Memory, MemoryCategory, MemoryEntry};
 use anyhow::Result;
 use async_trait::async_trait;
 use std::collections::HashSet;
@@ -53,16 +53,15 @@ impl Memory for SqliteQdrantHybridMemory {
         query: &str,
         limit: usize,
         session_id: Option<&str>,
-        _context: Option<&RecallContext>,
     ) -> Result<Vec<MemoryEntry>> {
         let trimmed_query = query.trim();
         if trimmed_query.is_empty() {
-            return self.sqlite.recall(query, limit, session_id, None).await;
+            return self.sqlite.recall(query, limit, session_id).await;
         }
 
         let qdrant_candidates = match self
             .qdrant
-            .recall(trimmed_query, limit.max(1).saturating_mul(3), session_id, None)
+            .recall(trimmed_query, limit.max(1).saturating_mul(3), session_id)
             .await
         {
             Ok(candidates) => candidates,
@@ -72,12 +71,12 @@ impl Memory for SqliteQdrantHybridMemory {
                     error = %err,
                     "Hybrid memory semantic recall failed; falling back to SQLite recall"
                 );
-                return self.sqlite.recall(trimmed_query, limit, session_id, None).await;
+                return self.sqlite.recall(trimmed_query, limit, session_id).await;
             }
         };
 
         if qdrant_candidates.is_empty() {
-            return self.sqlite.recall(trimmed_query, limit, session_id, None).await;
+            return self.sqlite.recall(trimmed_query, limit, session_id).await;
         }
 
         let mut seen_keys = HashSet::new();
@@ -115,7 +114,7 @@ impl Memory for SqliteQdrantHybridMemory {
         }
 
         if merged.is_empty() {
-            return self.sqlite.recall(trimmed_query, limit, session_id, None).await;
+            return self.sqlite.recall(trimmed_query, limit, session_id).await;
         }
 
         Ok(merged)
@@ -211,7 +210,6 @@ mod tests {
             _query: &str,
             _limit: usize,
             _session_id: Option<&str>,
-            _context: Option<&RecallContext>,
         ) -> Result<Vec<MemoryEntry>> {
             if self.fail_recall {
                 anyhow::bail!("simulated qdrant recall failure");
@@ -300,7 +298,7 @@ mod tests {
         ));
         let hybrid = SqliteQdrantHybridMemory::new(Arc::clone(&sqlite), qdrant);
 
-        let recalled = hybrid.recall("rank semantically", 2, None, None).await.unwrap();
+        let recalled = hybrid.recall("rank semantically", 2, None).await.unwrap();
         assert_eq!(recalled.len(), 2);
         assert_eq!(recalled[0].key, "b");
         assert_eq!(recalled[0].content, "beta from sqlite");
@@ -325,7 +323,7 @@ mod tests {
         let qdrant: Arc<dyn Memory> = Arc::new(StubQdrantMemory::new(Vec::new(), false, true));
         let hybrid = SqliteQdrantHybridMemory::new(Arc::clone(&sqlite), qdrant);
 
-        let recalled = hybrid.recall("fallback", 5, None, None).await.unwrap();
+        let recalled = hybrid.recall("fallback", 5, None).await.unwrap();
         assert!(
             recalled.iter().any(|entry| entry.key == "topic"),
             "SQLite fallback should provide recall results when Qdrant is unavailable"

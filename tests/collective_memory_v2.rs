@@ -8,7 +8,8 @@
 
 use snow_memory::types::MemoryTier;
 use zeroclaw::memory::collective::{scope_to_tier, CollectiveMemory};
-use zeroclaw::memory::traits::{Memory, MemoryCategory, RecallContext};
+use zeroclaw::memory::snowclaw_ext::RecallContext;
+use zeroclaw::memory::traits::{Memory, MemoryCategory};
 
 // ── Scope-to-tier classification tests ────────────────────────────
 
@@ -91,7 +92,7 @@ async fn recall_without_context_returns_all_tiers() {
         .unwrap();
 
     // No context → no filtering → all returned
-    let results = mem.recall("Snowclaw tier test", 10, None, None).await.unwrap();
+    let results = mem.recall("Snowclaw tier test", 10, None).await.unwrap();
     assert_eq!(results.len(), 3, "Without context, all tiers should be visible");
 }
 
@@ -116,7 +117,7 @@ async fn recall_main_session_sees_all_tiers() {
         group_id: None,
     };
 
-    let results = mem.recall("Snowclaw session test", 10, None, Some(&ctx)).await.unwrap();
+    let results = mem.recall_with_context("Snowclaw session test", 10, None, Some(&ctx)).await.unwrap();
     assert_eq!(results.len(), 3, "Main session should see all tiers");
 }
 
@@ -145,7 +146,7 @@ async fn recall_group_sees_public_and_matching_group() {
     };
 
     let results = mem
-        .recall("Snowclaw grouptest", 10, None, Some(&ctx))
+        .recall_with_context("Snowclaw grouptest", 10, None, Some(&ctx))
         .await
         .unwrap();
 
@@ -188,7 +189,7 @@ async fn recall_other_channel_sees_public_only() {
     };
 
     let results = mem
-        .recall("Snowclaw chantest", 10, None, Some(&ctx))
+        .recall_with_context("Snowclaw chantest", 10, None, Some(&ctx))
         .await
         .unwrap();
 
@@ -308,7 +309,7 @@ async fn relay_tier_filtering_with_sync() {
         group_id: None,
     };
     let results = mem2
-        .recall(&test_prefix, 20, None, Some(&ctx_main))
+        .recall_with_context(&test_prefix, 20, None, Some(&ctx_main))
         .await
         .unwrap();
     assert!(
@@ -324,7 +325,7 @@ async fn relay_tier_filtering_with_sync() {
         group_id: Some("testgrp".into()),
     };
     let results = mem2
-        .recall(&test_prefix, 20, None, Some(&ctx_group))
+        .recall_with_context(&test_prefix, 20, None, Some(&ctx_group))
         .await
         .unwrap();
     let keys: Vec<&str> = results.iter().map(|r| r.key.as_str()).collect();
@@ -348,7 +349,7 @@ async fn relay_tier_filtering_with_sync() {
         group_id: None,
     };
     let results = mem2
-        .recall(&test_prefix, 20, None, Some(&ctx_other))
+        .recall_with_context(&test_prefix, 20, None, Some(&ctx_other))
         .await
         .unwrap();
     let keys: Vec<&str> = results.iter().map(|r| r.key.as_str()).collect();
