@@ -294,8 +294,8 @@ fn show_integration_info(config: &Config, name: &str) -> Result<()> {
         }
         "Cron" => {
             println!("  Built-in:");
-            println!("    Schedule tasks in ~/.zeroclaw/workspace/cron/");
-            println!("    Run: zeroclaw cron list");
+            println!("    Schedule tasks in ~/.snowclaw/workspace/cron/");
+            println!("    Run: snowclaw cron list");
         }
         "Webhooks" => {
             println!("  Built-in:");

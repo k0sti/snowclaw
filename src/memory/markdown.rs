@@ -1,4 +1,4 @@
-use super::traits::{Memory, MemoryCategory, MemoryEntry};
+use super::traits::{Memory, MemoryCategory, MemoryEntry, RecallContext};
 use async_trait::async_trait;
 use chrono::Local;
 use std::path::{Path, PathBuf};
@@ -158,6 +158,7 @@ impl Memory for MarkdownMemory {
         query: &str,
         limit: usize,
         _session_id: Option<&str>,
+        _context: Option<&RecallContext>,
     ) -> anyhow::Result<Vec<MemoryEntry>> {
         let all = self.read_all_entries().await?;
         let query_lower = query.to_lowercase();
@@ -283,7 +284,7 @@ mod tests {
             .await
             .unwrap();
 
-        let results = mem.recall("Rust", 10, None).await.unwrap();
+        let results = mem.recall("Rust", 10, None, None).await.unwrap();
         assert!(results.len() >= 2);
         assert!(results
             .iter()
@@ -296,7 +297,7 @@ mod tests {
         mem.store("a", "Rust is great", MemoryCategory::Core, None)
             .await
             .unwrap();
-        let results = mem.recall("javascript", 10, None).await.unwrap();
+        let results = mem.recall("javascript", 10, None, None).await.unwrap();
         assert!(results.is_empty());
     }
 
@@ -343,7 +344,7 @@ mod tests {
     #[tokio::test]
     async fn markdown_empty_recall() {
         let (_tmp, mem) = temp_workspace();
-        let results = mem.recall("anything", 10, None).await.unwrap();
+        let results = mem.recall("anything", 10, None, None).await.unwrap();
         assert!(results.is_empty());
     }
 

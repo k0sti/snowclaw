@@ -1,0 +1,30 @@
+# Rust
+/target/
+**/*.rs.bk
+Cargo.lock
+
+# Database files
+*.db
+*.db-shm
+*.db-wal
+
+# Configuration and secrets
+bridge.toml
+*.json
+.secrets/
+
+# Logs
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local development
+last_seen.txt

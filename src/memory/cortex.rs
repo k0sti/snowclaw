@@ -1,6 +1,6 @@
 use super::lucid::LucidMemory;
 use super::sqlite::SqliteMemory;
-use super::traits::{Memory, MemoryCategory, MemoryEntry};
+use super::traits::{Memory, MemoryCategory, MemoryEntry, RecallContext};
 use async_trait::async_trait;
 use std::path::Path;
 
@@ -48,8 +48,9 @@ impl Memory for CortexMemMemory {
         query: &str,
         limit: usize,
         session_id: Option<&str>,
+        _context: Option<&RecallContext>,
     ) -> anyhow::Result<Vec<MemoryEntry>> {
-        self.inner.recall(query, limit, session_id).await
+        self.inner.recall(query, limit, session_id, None).await
     }
 
     async fn get(&self, key: &str) -> anyhow::Result<Option<MemoryEntry>> {

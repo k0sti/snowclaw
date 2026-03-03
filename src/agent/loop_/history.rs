@@ -776,6 +776,7 @@ mod tests {
                 _q: &str,
                 _l: usize,
                 _s: Option<&str>,
+                _context: Option<&crate::memory::RecallContext>,
             ) -> anyhow::Result<Vec<MemoryEntry>> {
                 Ok(vec![])
             }
@@ -911,6 +912,7 @@ mod tests {
                 _q: &str,
                 _l: usize,
                 _s: Option<&str>,
+                _context: Option<&crate::memory::RecallContext>,
             ) -> anyhow::Result<Vec<MemoryEntry>> {
                 Ok(vec![])
             }

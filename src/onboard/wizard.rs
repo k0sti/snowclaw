@@ -291,6 +291,7 @@ pub async fn run_wizard_with_migration(
         transcription: crate::config::TranscriptionConfig::default(),
         agents_ipc: crate::config::AgentsIpcConfig::default(),
         mcp: crate::config::schema::McpConfig::default(),
+        contextvm: None,
         model_support_vision: None,
         wasm: crate::config::WasmConfig::default(),
     };
@@ -516,6 +517,13 @@ fn memory_config_defaults_for_backend(backend: &str) -> MemoryConfig {
         sqlite_open_timeout_secs: None,
         sqlite_journal_mode: "wal".to_string(),
         qdrant: crate::config::QdrantConfig::default(),
+        encrypted_memory: None,
+        local_relay: None,
+        nsec: None,
+        embedding_api_key: None,
+        indexed_paths: Vec::new(),
+        index_interval_minutes: 30,
+        collective: crate::config::CollectiveMemoryConfig::default(),
     }
 }
 
@@ -710,7 +718,7 @@ fn resolve_quick_setup_dirs_with_home(home: &Path) -> (PathBuf, PathBuf) {
         }
     }
 
-    let config_dir = home.join(".zeroclaw");
+    let config_dir = home.join(crate::config::APP_DIR_NAME);
     (config_dir.clone(), config_dir.join("workspace"))
 }
 
@@ -807,6 +815,7 @@ async fn run_quick_setup_with_home(
         transcription: crate::config::TranscriptionConfig::default(),
         agents_ipc: crate::config::AgentsIpcConfig::default(),
         mcp: crate::config::schema::McpConfig::default(),
+        contextvm: None,
         model_support_vision: None,
         wasm: crate::config::WasmConfig::default(),
     };
@@ -945,7 +954,7 @@ async fn run_quick_setup_with_home(
                     fallback_env_vars.join(", ")
                 );
             }
-            println!("    2. Or edit:           ~/.zeroclaw/config.toml");
+            println!("    2. Or edit:           ~/.snowclaw/config.toml");
             println!("    3. Chat:              zeroclaw agent -m \"Hello!\"");
             println!("    4. Gateway:           zeroclaw gateway");
         }
@@ -6210,9 +6219,17 @@ fn setup_channels() -> Result<ChannelsConfig> {
                 }
 
                 config.nostr = Some(NostrConfig {
-                    private_key: private_key.trim().to_string(),
+                    nsec: Some(private_key.trim().to_string()),
                     relays: relays.clone(),
                     allowed_pubkeys,
+                    owner: None,
+                    groups: vec![],
+                    respond_mode: "mention_only".into(),
+                    group_respond_mode: std::collections::HashMap::new(),
+                    mention_names: vec![],
+                    listen_dms: true,
+                    context_history: 10,
+                    extra_kinds: vec![],
                 });
 
                 println!(
@@ -7229,7 +7246,7 @@ mod tests {
     #[tokio::test]
     async fn quick_setup_existing_config_requires_force_when_non_interactive() {
         let tmp = TempDir::new().unwrap();
-        let zeroclaw_dir = tmp.path().join(".zeroclaw");
+        let zeroclaw_dir = tmp.path().join(crate::config::APP_DIR_NAME);
         let config_path = zeroclaw_dir.join("config.toml");
 
         tokio::fs::create_dir_all(&zeroclaw_dir).await.unwrap();
@@ -7257,7 +7274,7 @@ mod tests {
     #[tokio::test]
     async fn quick_setup_existing_config_overwrites_with_force() {
         let tmp = TempDir::new().unwrap();
-        let zeroclaw_dir = tmp.path().join(".zeroclaw");
+        let zeroclaw_dir = tmp.path().join(crate::config::APP_DIR_NAME);
         let config_path = zeroclaw_dir.join("config.toml");
 
         tokio::fs::create_dir_all(&zeroclaw_dir).await.unwrap();
@@ -7295,7 +7312,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let workspace_root = tmp.path().join("zeroclaw-data");
         let workspace_dir = workspace_root.join("workspace");
-        let expected_config_path = workspace_root.join(".zeroclaw").join("config.toml");
+        let expected_config_path = workspace_root.join(crate::config::APP_DIR_NAME).join("config.toml");
 
         let _workspace_env = EnvVarGuard::set(
             "ZEROCLAW_WORKSPACE",

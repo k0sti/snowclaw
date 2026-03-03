@@ -1,5 +1,5 @@
 use super::embeddings::EmbeddingProvider;
-use super::traits::{Memory, MemoryCategory, MemoryEntry};
+use super::traits::{Memory, MemoryCategory, MemoryEntry, RecallContext};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::Utc;
@@ -291,6 +291,7 @@ impl Memory for QdrantMemory {
         query: &str,
         limit: usize,
         session_id: Option<&str>,
+        _context: Option<&RecallContext>,
     ) -> Result<Vec<MemoryEntry>> {
         if query.trim().is_empty() {
             return self.list(None, session_id).await;

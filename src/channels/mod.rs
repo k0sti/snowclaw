@@ -34,9 +34,12 @@ pub mod mattermost;
 pub mod napcat;
 pub mod nextcloud_talk;
 pub mod nostr;
+pub mod nostr_memory;
 pub mod qq;
 pub mod signal;
 pub mod slack;
+pub mod seen_events;
+mod snowclaw_channels;
 pub mod telegram;
 pub mod traits;
 pub mod transcription;
@@ -3067,7 +3070,7 @@ async fn build_memory_context(
 ) -> String {
     let mut context = String::new();
 
-    if let Ok(entries) = mem.recall(user_msg, 5, session_id).await {
+    if let Ok(entries) = mem.recall(user_msg, 5, session_id, None).await {
         let mut included = 0usize;
         let mut used_chars = 0usize;
 
@@ -5610,21 +5613,7 @@ async fn append_nostr_channel_if_available(
     channels: &mut Vec<ConfiguredChannel>,
     startup_context: &str,
 ) -> Option<String> {
-    let ns = config.channels_config.nostr.as_ref()?;
-    match NostrChannel::new(&ns.private_key, ns.relays.clone(), &ns.allowed_pubkeys).await {
-        Ok(channel) => {
-            channels.push(ConfiguredChannel {
-                display_name: "Nostr",
-                channel: Arc::new(channel),
-            });
-            None
-        }
-        Err(err) => {
-            let reason = format!("Nostr init failed during {startup_context}: {err}");
-            tracing::warn!("{reason}");
-            Some(reason)
-        }
-    }
+    snowclaw_channels::append_nostr_channel(config, channels, startup_context).await
 }
 
 /// Run health checks for configured channels.
@@ -10489,6 +10478,7 @@ BTC is currently around $65,000 based on latest tool output."#
             _query: &str,
             _limit: usize,
             _session_id: Option<&str>,
+            _context: Option<&crate::memory::RecallContext>,
         ) -> anyhow::Result<Vec<crate::memory::MemoryEntry>> {
             Ok(Vec::new())
         }
@@ -10541,6 +10531,7 @@ BTC is currently around $65,000 based on latest tool output."#
             _query: &str,
             _limit: usize,
             _session_id: Option<&str>,
+            _context: Option<&crate::memory::RecallContext>,
         ) -> anyhow::Result<Vec<crate::memory::MemoryEntry>> {
             Ok(vec![crate::memory::MemoryEntry {
                 id: "entry-1".to_string(),
@@ -11559,7 +11550,7 @@ BTC is currently around $65,000 based on latest tool output."#
 
         assert_eq!(mem.count().await.unwrap(), 2);
 
-        let recalled = mem.recall("45", 5, None).await.unwrap();
+        let recalled = mem.recall("45", 5, None, None).await.unwrap();
         assert!(recalled.iter().any(|entry| entry.content.contains("45")));
     }
 

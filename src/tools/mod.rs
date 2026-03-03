@@ -77,6 +77,8 @@ pub mod subagent_manage;
 pub mod subagent_registry;
 pub mod subagent_spawn;
 pub mod task_plan;
+pub mod agent_lesson;
+pub mod social_search;
 pub mod traits;
 pub mod url_validation;
 pub mod wasm_module;
@@ -86,6 +88,8 @@ pub mod web_fetch;
 pub mod web_search_config;
 pub mod web_search_tool;
 pub mod xlsx_read;
+pub mod nostr_tasks;
+mod snowclaw_tools;
 
 pub use agent_load_tracker::AgentLoadTracker;
 pub use apply_patch::ApplyPatchTool;
@@ -154,6 +158,9 @@ pub use web_fetch::WebFetchTool;
 pub use web_search_config::WebSearchConfigTool;
 pub use web_search_tool::WebSearchTool;
 pub use xlsx_read::XlsxReadTool;
+pub use agent_lesson::AgentLessonTool;
+pub use nostr_tasks::NostrTaskTool;
+pub use social_search::SocialSearchTool;
 
 pub use auth_profile::ManageAuthProfileTool;
 pub use quota_tools::{CheckProviderQuotaTool, EstimateQuotaCostTool, SwitchProviderTool};
@@ -463,6 +470,13 @@ pub fn all_tools_with_runtime(
             workspace_dir.to_path_buf(),
         )),
     ];
+
+    // Snowclaw-specific tools
+    let config_dir = root_config
+        .config_path
+        .parent()
+        .unwrap_or(std::path::Path::new("."));
+    snowclaw_tools::register_snowclaw_tools(&mut tool_arcs, &security, workspace_dir, config_dir);
 
     if has_shell_access {
         tool_arcs.push(Arc::new(ShellTool::new_with_syscall_detector(

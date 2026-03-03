@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use snow_memory::types::MemoryTier;
 
 /// A single memory entry
 #[derive(Clone, Serialize, Deserialize)]
@@ -51,6 +52,20 @@ impl std::fmt::Display for MemoryCategory {
     }
 }
 
+/// Context for tier-aware recall filtering.
+///
+/// Determines which privacy tiers of memories are visible based on
+/// the current session/channel context.
+#[derive(Debug, Clone)]
+pub struct RecallContext {
+    /// True when this is the main/DM session with the guardian.
+    pub is_main_session: bool,
+    /// Channel name (e.g. "nostr", "telegram").
+    pub channel: Option<String>,
+    /// NIP-29 group id, if in a group chat.
+    pub group_id: Option<String>,
+}
+
 /// Core memory trait — implement for any persistence backend
 #[async_trait]
 pub trait Memory: Send + Sync {
@@ -66,12 +81,18 @@ pub trait Memory: Send + Sync {
         session_id: Option<&str>,
     ) -> anyhow::Result<()>;
 
-    /// Recall memories matching a query (keyword search), optionally scoped to a session
+    /// Recall memories matching a query (keyword search), optionally scoped to a session.
+    ///
+    /// When `context` is provided, results are filtered by privacy tier:
+    /// - Main session: Public + Private + matching Group
+    /// - Group chat: Public + matching Group only
+    /// - Other: Public only
     async fn recall(
         &self,
         query: &str,
         limit: usize,
         session_id: Option<&str>,
+        context: Option<&RecallContext>,
     ) -> anyhow::Result<Vec<MemoryEntry>>;
 
     /// Get a specific memory by key
@@ -89,6 +110,28 @@ pub trait Memory: Send + Sync {
 
     /// Count total memories
     async fn count(&self) -> anyhow::Result<usize>;
+
+    /// Store a memory with an explicit privacy tier.
+    ///
+    /// Default implementation ignores the tier and delegates to `store()`.
+    /// Backends that support tiered storage (e.g. `CollectiveMemory`) override this.
+    async fn store_with_tier(
+        &self,
+        key: &str,
+        content: &str,
+        category: MemoryCategory,
+        _tier: MemoryTier,
+    ) -> anyhow::Result<()> {
+        self.store(key, content, category, None).await
+    }
+
+    /// Promote a memory to a higher visibility tier.
+    ///
+    /// Tier direction: Private -> Group -> Public. Demotions are rejected.
+    /// Default implementation returns an error for backends that don't support promotion.
+    async fn promote(&self, _key: &str, _new_tier: MemoryTier) -> anyhow::Result<()> {
+        anyhow::bail!("{} backend does not support memory promotion", self.name())
+    }
 
     /// Health check
     async fn health_check(&self) -> bool;

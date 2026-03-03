@@ -4,6 +4,7 @@ use crate::security::policy::ToolOperation;
 use crate::security::SecurityPolicy;
 use async_trait::async_trait;
 use serde_json::json;
+use snow_memory::types::MemoryTier;
 use std::sync::Arc;
 
 /// Let the agent store memories — its own brain writes
@@ -34,7 +35,7 @@ impl Tool for MemoryStoreTool {
             "properties": {
                 "key": {
                     "type": "string",
-                    "description": "Unique key for this memory (e.g. 'user_lang', 'project_stack')"
+                    "description": "Unique key for this memory (e.g. 'core:timezone', 'pref:language', 'contact:a1b2c3')"
                 },
                 "content": {
                     "type": "string",
@@ -43,6 +44,10 @@ impl Tool for MemoryStoreTool {
                 "category": {
                     "type": "string",
                     "description": "Memory category: 'core' (permanent), 'daily' (session), 'conversation' (chat), or a custom category name. Defaults to 'core'."
+                },
+                "tier": {
+                    "type": "string",
+                    "description": "Privacy tier: 'public', 'private', or 'group:<id>'. If omitted, tier is inferred from the key scope prefix."
                 }
             },
             "required": ["key", "content"]
@@ -54,6 +59,35 @@ impl Tool for MemoryStoreTool {
             .get("key")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing 'key' parameter"))?;
+
+        // Key validation
+        if key.is_empty() {
+            return Ok(ToolResult {
+                success: false,
+                output: String::new(),
+                error: Some("Key must be non-empty".to_string()),
+            });
+        }
+        if key.len() > 256 {
+            return Ok(ToolResult {
+                success: false,
+                output: String::new(),
+                error: Some(format!("Key too long ({} chars, max 256)", key.len())),
+            });
+        }
+
+        // Validate scope prefix if key is scoped (contains ':')
+        let mut scope_warning = None;
+        if let Some(scope) = key.split(':').next() {
+            if key.contains(':') {
+                const KNOWN_SCOPES: &[&str] =
+                    &["core", "pref", "contact", "conv", "group", "lesson"];
+                if !KNOWN_SCOPES.contains(&scope) {
+                    scope_warning =
+                        Some(format!("Unknown scope prefix '{scope}' — memory stored but tier inference may be inaccurate"));
+                }
+            }
+        }
 
         let content = args
             .get("content")
@@ -67,6 +101,22 @@ impl Tool for MemoryStoreTool {
             Some(other) => MemoryCategory::Custom(other.to_string()),
         };
 
+        // Parse optional tier hint: "public", "private", or "group:<id>".
+        // The collective backend determines the actual tier from the key scope prefix;
+        // the tier parameter is advisory and logged for transparency.
+        let tier_hint = args.get("tier").and_then(|v| v.as_str()).map(|t| match t {
+            "public" => MemoryTier::Public,
+            "private" => MemoryTier::Private("self".to_string()),
+            s if s.starts_with("group:") => {
+                MemoryTier::Group(s.strip_prefix("group:").unwrap_or("default").to_string())
+            }
+            _ => MemoryTier::Public,
+        });
+
+        if let Some(ref tier) = tier_hint {
+            tracing::debug!("memory_store: tier hint = {tier:?} for key '{key}'");
+        }
+
         if let Err(error) = self
             .security
             .enforce_tool_operation(ToolOperation::Act, "memory_store")
@@ -78,12 +128,26 @@ impl Tool for MemoryStoreTool {
             });
         }
 
-        match self.memory.store(key, content, category, None).await {
-            Ok(()) => Ok(ToolResult {
-                success: true,
-                output: format!("Stored memory: {key}"),
-                error: None,
-            }),
+        let store_result = if let Some(tier) = tier_hint {
+            self.memory
+                .store_with_tier(key, content, category, tier)
+                .await
+        } else {
+            self.memory.store(key, content, category, None).await
+        };
+
+        match store_result {
+            Ok(()) => {
+                let mut output = format!("Stored memory: {key}");
+                if let Some(warning) = scope_warning {
+                    output.push_str(&format!("\nWarning: {warning}"));
+                }
+                Ok(ToolResult {
+                    success: true,
+                    output,
+                    error: None,
+                })
+            }
             Err(e) => Ok(ToolResult {
                 success: false,
                 output: String::new(),
@@ -220,5 +284,67 @@ mod tests {
             .unwrap_or("")
             .contains("Rate limit exceeded"));
         assert!(mem.get("lang").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn store_rejects_empty_key() {
+        let (_tmp, mem) = test_mem();
+        let tool = MemoryStoreTool::new(mem, test_security());
+        let result = tool
+            .execute(json!({"key": "", "content": "data"}))
+            .await
+            .unwrap();
+        assert!(!result.success);
+        assert!(result.error.as_deref().unwrap_or("").contains("non-empty"));
+    }
+
+    #[tokio::test]
+    async fn store_rejects_key_over_256_chars() {
+        let (_tmp, mem) = test_mem();
+        let tool = MemoryStoreTool::new(mem, test_security());
+        let long_key = "x".repeat(257);
+        let result = tool
+            .execute(json!({"key": long_key, "content": "data"}))
+            .await
+            .unwrap();
+        assert!(!result.success);
+        assert!(result.error.as_deref().unwrap_or("").contains("too long"));
+    }
+
+    #[tokio::test]
+    async fn store_accepts_valid_scoped_key() {
+        let (_tmp, mem) = test_mem();
+        let tool = MemoryStoreTool::new(mem, test_security());
+        let result = tool
+            .execute(json!({"key": "core:timezone", "content": "UTC+3"}))
+            .await
+            .unwrap();
+        assert!(result.success);
+        assert!(!result.output.contains("Warning"));
+    }
+
+    #[tokio::test]
+    async fn store_warns_on_unknown_scope() {
+        let (_tmp, mem) = test_mem();
+        let tool = MemoryStoreTool::new(mem, test_security());
+        let result = tool
+            .execute(json!({"key": "weird:stuff", "content": "data"}))
+            .await
+            .unwrap();
+        assert!(result.success);
+        assert!(result.output.contains("Unknown scope"));
+    }
+
+    #[tokio::test]
+    async fn store_with_tier_hint() {
+        let (_tmp, mem) = test_mem();
+        let tool = MemoryStoreTool::new(mem.clone(), test_security());
+        let result = tool
+            .execute(json!({"key": "pref:lang", "content": "Rust", "tier": "private"}))
+            .await
+            .unwrap();
+        assert!(result.success);
+        let entry = mem.get("pref:lang").await.unwrap();
+        assert!(entry.is_some());
     }
 }

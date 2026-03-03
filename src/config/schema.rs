@@ -5,6 +5,12 @@ use crate::providers::{
 use crate::security::{AutonomyLevel, DomainMatcher};
 use anyhow::{Context, Result};
 use directories::UserDirs;
+
+pub use crate::config::snowclaw_schema::APP_DIR_NAME;
+pub use crate::config::snowclaw_schema::ContextVmEntry;
+pub use crate::config::snowclaw_schema::CollectiveMemoryConfig;
+pub use crate::config::snowclaw_schema::McpServerEntry;
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
@@ -389,6 +395,10 @@ pub struct Config {
     #[serde(default, alias = "mcpServers")]
     pub mcp: McpConfig,
 
+    /// ContextVM (MCP over Nostr) configuration.
+    #[serde(default)]
+    pub contextvm: Option<ContextVmEntry>,
+
     /// Vision support override for the active provider/model.
     /// - `None` (default): use provider's built-in default
     /// - `Some(true)`: force vision support on (e.g. Ollama running llava)
@@ -763,7 +773,7 @@ pub struct McpConfig {
 // ── Agents IPC ──────────────────────────────────────────────────
 
 fn default_agents_ipc_db_path() -> String {
-    "~/.zeroclaw/agents.db".into()
+    "~/.snowclaw/agents.db".into()
 }
 
 fn default_agents_ipc_staleness_secs() -> u64 {
@@ -3097,6 +3107,31 @@ pub struct MemoryConfig {
     /// Used when `backend = "qdrant"` or `backend = "sqlite_qdrant_hybrid"`.
     #[serde(default)]
     pub qdrant: QdrantConfig,
+
+    // ── Nostr memory extensions (snowclaw) ─────────────────────
+    /// Enable encrypted memory storage on Nostr relays.
+    #[serde(default)]
+    pub encrypted_memory: Option<bool>,
+    /// Local relay URL for memory storage.
+    #[serde(default)]
+    pub local_relay: Option<String>,
+    /// Nostr secret key (nsec) for signing memory events. Falls back to SNOWCLAW_NSEC env.
+    #[serde(default)]
+    pub nsec: Option<String>,
+    /// API key for embedding service (e.g. OpenRouter)
+    #[serde(default)]
+    pub embedding_api_key: Option<String>,
+    /// Paths to index for RAG/search.
+    #[serde(default)]
+    pub indexed_paths: Vec<String>,
+    /// Re-index interval in minutes (default: 30)
+    #[serde(default = "crate::config::snowclaw_schema::default_index_interval_minutes")]
+    pub index_interval_minutes: u64,
+
+    // ── Collective memory (snow-memory) ──────────────────────
+    /// Collective memory backend configuration.
+    #[serde(default)]
+    pub collective: crate::config::snowclaw_schema::CollectiveMemoryConfig,
 }
 
 fn default_sqlite_journal_mode() -> String {
@@ -3172,6 +3207,13 @@ impl Default for MemoryConfig {
             sqlite_open_timeout_secs: None,
             sqlite_journal_mode: default_sqlite_journal_mode(),
             qdrant: QdrantConfig::default(),
+            encrypted_memory: None,
+            local_relay: None,
+            nsec: None,
+            embedding_api_key: None,
+            indexed_paths: Vec::new(),
+            index_interval_minutes: crate::config::snowclaw_schema::default_index_interval_minutes(),
+            collective: crate::config::snowclaw_schema::CollectiveMemoryConfig::default(),
         }
     }
 }
@@ -6496,36 +6538,7 @@ impl ChannelConfig for QQConfig {
     }
 }
 
-/// Nostr channel configuration (NIP-04 + NIP-17 private messages)
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct NostrConfig {
-    /// Private key in hex or nsec bech32 format
-    pub private_key: String,
-    /// Relay URLs (wss://). Defaults to popular public relays if omitted.
-    #[serde(default = "default_nostr_relays")]
-    pub relays: Vec<String>,
-    /// Allowed sender public keys (hex or npub). Empty = deny all, "*" = allow all
-    #[serde(default)]
-    pub allowed_pubkeys: Vec<String>,
-}
-
-impl ChannelConfig for NostrConfig {
-    fn name() -> &'static str {
-        "Nostr"
-    }
-    fn desc() -> &'static str {
-        "Nostr DMs"
-    }
-}
-
-pub fn default_nostr_relays() -> Vec<String> {
-    vec![
-        "wss://relay.damus.io".to_string(),
-        "wss://nos.lol".to_string(),
-        "wss://relay.primal.net".to_string(),
-        "wss://relay.snort.social".to_string(),
-    ]
-}
+pub use crate::config::snowclaw_schema::{NostrConfig, default_nostr_relays};
 
 // ── Config impl ──────────────────────────────────────────────────
 
@@ -6533,7 +6546,7 @@ impl Default for Config {
     fn default() -> Self {
         let home =
             UserDirs::new().map_or_else(|| PathBuf::from("."), |u| u.home_dir().to_path_buf());
-        let zeroclaw_dir = home.join(".zeroclaw");
+        let zeroclaw_dir = home.join(APP_DIR_NAME);
 
         Self {
             workspace_dir: zeroclaw_dir.join("workspace"),
@@ -6586,6 +6599,7 @@ impl Default for Config {
             transcription: TranscriptionConfig::default(),
             agents_ipc: AgentsIpcConfig::default(),
             mcp: McpConfig::default(),
+            contextvm: None,
             model_support_vision: None,
             wasm: WasmConfig::default(),
         }
@@ -6608,7 +6622,7 @@ fn default_config_dir() -> Result<PathBuf> {
     let home = UserDirs::new()
         .map(|u| u.home_dir().to_path_buf())
         .context("Could not find home directory")?;
-    Ok(home.join(".zeroclaw"))
+    Ok(home.join(APP_DIR_NAME))
 }
 
 fn active_workspace_state_path(marker_root: &Path) -> PathBuf {
@@ -6836,7 +6850,7 @@ pub(crate) fn resolve_config_dir_for_workspace(workspace_dir: &Path) -> (PathBuf
 
     let legacy_config_dir = workspace_dir
         .parent()
-        .map(|parent| parent.join(".zeroclaw"));
+        .map(|parent| parent.join(APP_DIR_NAME));
     if let Some(legacy_dir) = legacy_config_dir {
         if legacy_dir.join("config.toml").exists() {
             return (legacy_dir, workspace_config_dir);
@@ -7223,11 +7237,13 @@ fn decrypt_channel_secrets(
         )?;
     }
     if let Some(ref mut nostr) = channels.nostr {
-        decrypt_secret(
-            store,
-            &mut nostr.private_key,
-            "config.channels_config.nostr.private_key",
-        )?;
+        if let Some(ref mut nsec) = nostr.nsec {
+            decrypt_secret(
+                store,
+                nsec,
+                "config.channels_config.nostr.nsec",
+            )?;
+        }
     }
     if let Some(ref mut clawdtalk) = channels.clawdtalk {
         decrypt_secret(
@@ -7428,11 +7444,13 @@ fn encrypt_channel_secrets(
         )?;
     }
     if let Some(ref mut nostr) = channels.nostr {
-        encrypt_secret(
-            store,
-            &mut nostr.private_key,
-            "config.channels_config.nostr.private_key",
-        )?;
+        if let Some(ref mut nsec) = nostr.nsec {
+            encrypt_secret(
+                store,
+                nsec,
+                "config.channels_config.nostr.nsec",
+            )?;
+        }
     }
     if let Some(ref mut clawdtalk) = channels.clawdtalk {
         encrypt_secret(
@@ -10508,6 +10526,7 @@ ws_url = "ws://127.0.0.1:3002"
             transcription: TranscriptionConfig::default(),
             agents_ipc: AgentsIpcConfig::default(),
             mcp: McpConfig::default(),
+            contextvm: None,
             model_support_vision: None,
             wasm: WasmConfig::default(),
         };
@@ -10896,6 +10915,7 @@ denied_tools = ["shell"]
             transcription: TranscriptionConfig::default(),
             agents_ipc: AgentsIpcConfig::default(),
             mcp: McpConfig::default(),
+            contextvm: None,
             model_support_vision: None,
             wasm: WasmConfig::default(),
         };
@@ -13387,7 +13407,7 @@ provider_api = "not-a-real-mode"
             .map(PathBuf::from)
             .unwrap_or_else(|| std::env::current_dir().unwrap());
         let non_temp_root = base.join(format!("zeroclaw_marker_guard_{}", uuid::Uuid::new_v4()));
-        let default_config_dir = non_temp_root.join(".zeroclaw");
+        let default_config_dir = non_temp_root.join(APP_DIR_NAME);
         let default_workspace_dir = default_config_dir.join("workspace");
         let marker_config_dir = std::env::temp_dir().join(format!(
             "zeroclaw_temp_marker_profile_{}",
@@ -13480,7 +13500,7 @@ provider_api = "not-a-real-mode"
         let temp_home =
             std::env::temp_dir().join(format!("zeroclaw_test_home_{}", uuid::Uuid::new_v4()));
         let workspace_dir = temp_home.join("workspace");
-        let legacy_config_path = temp_home.join(".zeroclaw").join("config.toml");
+        let legacy_config_path = temp_home.join(APP_DIR_NAME).join("config.toml");
 
         let original_home = std::env::var("HOME").ok();
         std::env::set_var("HOME", &temp_home);
@@ -13507,7 +13527,7 @@ provider_api = "not-a-real-mode"
         let temp_home =
             std::env::temp_dir().join(format!("zeroclaw_test_home_{}", uuid::Uuid::new_v4()));
         let workspace_dir = temp_home.join("custom-workspace");
-        let legacy_config_dir = temp_home.join(".zeroclaw");
+        let legacy_config_dir = temp_home.join(APP_DIR_NAME);
         let legacy_config_path = legacy_config_dir.join("config.toml");
 
         fs::create_dir_all(&legacy_config_dir).await.unwrap();
@@ -13686,7 +13706,7 @@ default_model = "legacy-model"
         let _env_guard = env_override_lock().await;
         let temp_home =
             std::env::temp_dir().join(format!("zeroclaw_test_home_{}", uuid::Uuid::new_v4()));
-        let default_config_dir = temp_home.join(".zeroclaw");
+        let default_config_dir = temp_home.join(APP_DIR_NAME);
         let custom_config_dir = temp_home.join("profiles").join("custom-profile");
         let marker_path = default_config_dir.join(ACTIVE_WORKSPACE_STATE_FILE);
         let custom_marker_path = custom_config_dir.join(ACTIVE_WORKSPACE_STATE_FILE);
