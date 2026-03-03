@@ -34,9 +34,12 @@ pub mod mattermost;
 pub mod napcat;
 pub mod nextcloud_talk;
 pub mod nostr;
+pub mod nostr_memory;
 pub mod qq;
 pub mod signal;
 pub mod slack;
+pub mod seen_events;
+mod snowclaw_channels;
 pub mod telegram;
 pub mod traits;
 pub mod transcription;
@@ -5610,21 +5613,7 @@ async fn append_nostr_channel_if_available(
     channels: &mut Vec<ConfiguredChannel>,
     startup_context: &str,
 ) -> Option<String> {
-    let ns = config.channels_config.nostr.as_ref()?;
-    match NostrChannel::new(&ns.private_key, ns.relays.clone(), &ns.allowed_pubkeys).await {
-        Ok(channel) => {
-            channels.push(ConfiguredChannel {
-                display_name: "Nostr",
-                channel: Arc::new(channel),
-            });
-            None
-        }
-        Err(err) => {
-            let reason = format!("Nostr init failed during {startup_context}: {err}");
-            tracing::warn!("{reason}");
-            Some(reason)
-        }
-    }
+    snowclaw_channels::append_nostr_channel(config, channels, startup_context).await
 }
 
 /// Run health checks for configured channels.

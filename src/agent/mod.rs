@@ -8,6 +8,7 @@ pub mod prompt;
 pub mod quota_aware;
 pub mod research;
 pub mod session;
+pub(crate) mod snowclaw_agent;
 pub mod team_orchestration;
 
 #[cfg(test)]

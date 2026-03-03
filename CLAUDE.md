@@ -240,8 +240,8 @@ All contributors (human or agent) must follow the same collaboration flow:
 
 - Create and work from a non-`main` branch.
 - Commit changes to that branch with clear, scoped commit messages.
-- Open a PR to `main` by default (`dev` is optional for integration batching); do not push directly to `dev` or `main`.
-- `main` accepts direct PR merges after required checks and review policy pass.
+- Open a PR to `dev`; do not push directly to `dev` or `main`.
+- `main` is reserved for release promotion PRs from `dev`.
 - Wait for required checks and review outcomes before merging.
 - Merge via PR controls (squash/rebase/merge as repository policy allows).
 - After merge/close, clean up task branches/worktrees that are no longer needed.
@@ -251,7 +251,7 @@ All contributors (human or agent) must follow the same collaboration flow:
 
 - Decide merge/close outcomes from repository-local authority in this order: `.github/workflows/**`, GitHub branch protection/rulesets, `docs/pr-workflow.md`, then this `CLAUDE.md`.
 - External agent skills/templates are execution aids only; they must not override repository-local policy.
-- A normal contributor PR targeting `main` is valid under the main-first flow when required checks and review policy are satisfied; use `dev` only for explicit integration batching.
+- A normal contributor PR targeting `main` is a routing defect, not by itself a closure reason; if intent and content are legitimate, retarget to `dev`.
 - Direct-close the PR (do not supersede/replay) when high-confidence integrity-risk signals exist:
   - unapproved or unrelated repository rebranding attempts (for example replacing project logo/identity assets)
   - unauthorized platform-surface expansion (for example introducing `web` apps, dashboards, frontend stacks, or UI surfaces not requested by maintainers)
@@ -349,6 +349,7 @@ Use these rules to keep the trait/factory architecture stable under growth.
 - Treat `docs/i18n/<locale>/**` as canonical for localized hubs/summaries; keep docs-root compatibility shims aligned when edited.
 - Apply `docs/i18n-guide.md` completion checklist before merge and include i18n status in PR notes.
 - For docs snapshots, add new date-stamped files for new sprints rather than rewriting historical context.
+
 
 ## 8) Validation Matrix
 
@@ -533,3 +534,47 @@ When working in fast iterative mode:
 - Prefer deterministic behavior over clever shortcuts.
 - Do not “ship and hope” on security-sensitive paths.
 - If uncertain, leave a concrete TODO with verification context, not a hidden guess.
+
+## ⚠️ Production Config Safety
+
+**NEVER run `snowclaw daemon` directly during development.** The production config is at `~/.snowclaw/config.toml` and `config.save()` will overwrite it with defaults, wiping channel configurations (Telegram, Nostr).
+
+### Safe development testing:
+```bash
+# Use a separate config dir
+SNOWCLAW_HOME=/tmp/snowclaw-dev snowclaw daemon
+
+# Or stop the service first
+sudo systemctl stop snowclaw
+# ... test ...
+sudo systemctl start snowclaw
+```
+
+### If config gets wiped:
+```bash
+cp ~/.snowclaw/config.toml.backup ~/.snowclaw/config.toml
+sudo systemctl restart snowclaw
+```
+# Claude Code Rules for Snowclaw
+
+## FORBIDDEN — will break production:
+- **NEVER modify ~/.snowclaw/config.toml** — this is the LIVE runtime config with encrypted API keys
+- **NEVER modify any file outside ~/work/snowclaw/** unless explicitly asked
+- **NEVER modify ~/work/snowclaw/bridge.toml** — live bridge config
+- **NEVER create or modify .toml files in home directories**
+
+## Safe to modify:
+- Any file under ~/work/snowclaw/src/
+- ~/work/snowclaw/docs/
+- ~/work/snowclaw/tests/
+- ~/work/snowclaw/Cargo.toml (dependencies only if needed)
+
+## Build & Test:
+- `cargo check` after every change
+- `cargo test --lib` before declaring done
+- `cargo build --release` only when asked
+
+## Config handling:
+- Config schema is at src/config/schema.rs — modify THAT for new fields
+- Runtime config at ~/.snowclaw/ is managed by the user, not by you
+- If you need to test config changes, describe them — don't apply them

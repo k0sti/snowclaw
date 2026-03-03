@@ -1,3 +1,4 @@
+pub mod pricing;
 pub mod tracker;
 pub mod types;
 
@@ -5,4 +6,7 @@ pub mod types;
 #[allow(unused_imports)]
 pub use tracker::CostTracker;
 #[allow(unused_imports)]
-pub use types::{BudgetCheck, CostRecord, CostSummary, ModelStats, TokenUsage, UsagePeriod};
+pub use types::{
+    BudgetCheck, ChannelStats, CostRecord, CostSummary, ModelStats, PromptBreakdown, RoomStats,
+    TokenBreakdown, TokenUsage, UsageBreakdown, UsagePeriod,
+};

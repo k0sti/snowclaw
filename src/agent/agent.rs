@@ -301,7 +301,7 @@ impl Agent {
             None
         };
 
-        let tools = tools::all_tools_with_runtime(
+        let mut tools = tools::all_tools_with_runtime(
             Arc::new(config.clone()),
             &security,
             runtime,
@@ -346,6 +346,9 @@ impl Agent {
                 "agent.allowed_tools and agent.denied_tools removed all executable tools; update [agent] tool filters"
             );
         }
+
+        // Register Snowclaw MCP tools (local stdio/SSE + ContextVM)
+        crate::agent::snowclaw_agent::register_mcp_tools(config, &mut tools);
 
         let provider_name = config.default_provider.as_deref().unwrap_or("openrouter");
 

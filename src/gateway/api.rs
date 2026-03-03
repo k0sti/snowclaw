@@ -1130,7 +1130,7 @@ fn mask_sensitive_fields(config: &crate::config::Config) -> crate::config::Confi
         mask_required_secret(&mut qq.app_secret);
     }
     if let Some(nostr) = masked.channels_config.nostr.as_mut() {
-        mask_required_secret(&mut nostr.private_key);
+        mask_optional_secret(&mut nostr.nsec);
     }
     if let Some(clawdtalk) = masked.channels_config.clawdtalk.as_mut() {
         mask_required_secret(&mut clawdtalk.api_key);
@@ -1341,7 +1341,7 @@ fn restore_masked_sensitive_fields(
         incoming.channels_config.nostr.as_mut(),
         current.channels_config.nostr.as_ref(),
     ) {
-        restore_required_secret(&mut incoming_ch.private_key, &current_ch.private_key);
+        restore_optional_secret(&mut incoming_ch.nsec, &current_ch.nsec);
     }
     if let (Some(incoming_ch), Some(current_ch)) = (
         incoming.channels_config.clawdtalk.as_mut(),

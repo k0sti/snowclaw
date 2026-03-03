@@ -162,6 +162,85 @@ impl CostTracker {
         })
     }
 
+    /// Record a usage event with channel context.
+    pub fn record_usage_with_context(
+        &self,
+        usage: TokenUsage,
+        channel: Option<String>,
+        room: Option<String>,
+        message_type: Option<String>,
+    ) -> Result<()> {
+        if !self.config.enabled {
+            return Ok(());
+        }
+
+        if !usage.cost_usd.is_finite() || usage.cost_usd < 0.0 {
+            return Err(anyhow!(
+                "Token usage cost must be a finite, non-negative value"
+            ));
+        }
+
+        let record = CostRecord::with_context(&self.session_id, usage, channel, room, message_type);
+
+        {
+            let mut storage = self.lock_storage();
+            storage.add_record(record.clone())?;
+        }
+
+        let mut session_costs = self.lock_session_costs();
+        session_costs.push(record);
+
+        Ok(())
+    }
+
+    /// Record a usage event with channel context and token breakdown.
+    pub fn record_usage_with_breakdown(
+        &self,
+        usage: TokenUsage,
+        channel: Option<String>,
+        room: Option<String>,
+        message_type: Option<String>,
+        breakdown: Option<super::types::TokenBreakdown>,
+    ) -> Result<()> {
+        if !self.config.enabled {
+            return Ok(());
+        }
+
+        if !usage.cost_usd.is_finite() || usage.cost_usd < 0.0 {
+            return Err(anyhow!(
+                "Token usage cost must be a finite, non-negative value"
+            ));
+        }
+
+        let record =
+            CostRecord::with_breakdown(&self.session_id, usage, channel, room, message_type, breakdown);
+
+        {
+            let mut storage = self.lock_storage();
+            storage.add_record(record.clone())?;
+        }
+
+        let mut session_costs = self.lock_session_costs();
+        session_costs.push(record);
+
+        Ok(())
+    }
+
+    /// Get usage breakdown for a specific date.
+    pub fn get_usage_breakdown(
+        &self,
+        date: chrono::NaiveDate,
+    ) -> Result<super::types::UsageBreakdown> {
+        let storage = self.lock_storage();
+        storage.get_usage_breakdown_for_date(date)
+    }
+
+    /// Get per-room usage summaries across all time.
+    pub fn get_room_summaries(&self) -> Result<Vec<super::types::ChannelStats>> {
+        let storage = self.lock_storage();
+        storage.get_room_summaries()
+    }
+
     /// Get the daily cost for a specific date.
     pub fn get_daily_cost(&self, date: NaiveDate) -> Result<f64> {
         let storage = self.lock_storage();
@@ -177,7 +256,7 @@ impl CostTracker {
 
 fn resolve_storage_path(workspace_dir: &Path) -> Result<PathBuf> {
     let storage_path = workspace_dir.join("state").join("costs.jsonl");
-    let legacy_path = workspace_dir.join(".zeroclaw").join("costs.db");
+    let legacy_path = workspace_dir.join(crate::config::APP_DIR_NAME).join("costs.db");
 
     if !storage_path.exists() && legacy_path.exists() {
         if let Some(parent) = storage_path.parent() {
@@ -384,6 +463,155 @@ impl CostStorage {
         })?;
 
         Ok(cost)
+    }
+
+    /// Get usage breakdown for a specific date.
+    fn get_usage_breakdown_for_date(
+        &self,
+        date: chrono::NaiveDate,
+    ) -> Result<super::types::UsageBreakdown> {
+        use super::types::{ChannelStats, ModelStats, RoomStats, UsageBreakdown};
+
+        let mut breakdown = UsageBreakdown {
+            total_cost_usd: 0.0,
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            total_cache_read_tokens: 0,
+            total_cache_write_tokens: 0,
+            request_count: 0,
+            by_model: HashMap::new(),
+            by_channel: HashMap::new(),
+            token_breakdown: None,
+        };
+        let mut agg_bd = super::types::TokenBreakdown::default();
+        let mut has_any_breakdown = false;
+
+        self.for_each_record(|record| {
+            if record.usage.timestamp.naive_utc().date() != date {
+                return;
+            }
+
+            breakdown.total_cost_usd += record.usage.cost_usd;
+            breakdown.total_input_tokens += record.usage.input_tokens;
+            breakdown.total_output_tokens += record.usage.output_tokens;
+            breakdown.total_cache_read_tokens += record.usage.cache_read_tokens.unwrap_or(0);
+            breakdown.total_cache_write_tokens += record.usage.cache_write_tokens.unwrap_or(0);
+            breakdown.request_count += 1;
+
+            // Aggregate token breakdowns
+            if let Some(ref bd) = record.breakdown {
+                has_any_breakdown = true;
+                agg_bd.tooling += bd.tooling;
+                agg_bd.safety += bd.safety;
+                agg_bd.skills += bd.skills;
+                agg_bd.identity += bd.identity;
+                agg_bd.workspace_files += bd.workspace_files;
+                agg_bd.runtime += bd.runtime;
+                agg_bd.conversation_history += bd.conversation_history;
+                agg_bd.tool_results += bd.tool_results;
+                agg_bd.memory_context += bd.memory_context;
+                agg_bd.user_message += bd.user_message;
+                agg_bd.channel_context += bd.channel_context;
+                agg_bd.assistant_response += bd.assistant_response;
+                agg_bd.tool_calls_output += bd.tool_calls_output;
+                agg_bd.thinking += bd.thinking;
+            }
+
+            let model_entry = breakdown
+                .by_model
+                .entry(record.usage.model.clone())
+                .or_insert_with(|| ModelStats {
+                    model: record.usage.model.clone(),
+                    cost_usd: 0.0,
+                    total_tokens: 0,
+                    request_count: 0,
+                });
+            model_entry.cost_usd += record.usage.cost_usd;
+            model_entry.total_tokens += record.usage.total_tokens;
+            model_entry.request_count += 1;
+
+            let channel_name = record
+                .channel
+                .as_deref()
+                .unwrap_or("unknown")
+                .to_string();
+            let channel_entry = breakdown
+                .by_channel
+                .entry(channel_name.clone())
+                .or_insert_with(|| ChannelStats {
+                    channel: channel_name,
+                    cost_usd: 0.0,
+                    total_tokens: 0,
+                    request_count: 0,
+                    by_room: HashMap::new(),
+                });
+            channel_entry.cost_usd += record.usage.cost_usd;
+            channel_entry.total_tokens += record.usage.total_tokens;
+            channel_entry.request_count += 1;
+
+            let room_name = record.room.as_deref().unwrap_or("default").to_string();
+            let room_entry = channel_entry
+                .by_room
+                .entry(room_name.clone())
+                .or_insert_with(|| RoomStats {
+                    room: room_name,
+                    cost_usd: 0.0,
+                    total_tokens: 0,
+                    request_count: 0,
+                });
+            room_entry.cost_usd += record.usage.cost_usd;
+            room_entry.total_tokens += record.usage.total_tokens;
+            room_entry.request_count += 1;
+        })?;
+
+        if has_any_breakdown {
+            breakdown.token_breakdown = Some(agg_bd);
+        }
+
+        Ok(breakdown)
+    }
+
+    /// Get per-room usage summaries across all time.
+    fn get_room_summaries(&self) -> Result<Vec<super::types::ChannelStats>> {
+        use super::types::{ChannelStats, RoomStats};
+
+        let mut channels: HashMap<String, ChannelStats> = HashMap::new();
+
+        self.for_each_record(|record| {
+            let channel_name = record
+                .channel
+                .as_deref()
+                .unwrap_or("unknown")
+                .to_string();
+            let channel_entry = channels
+                .entry(channel_name.clone())
+                .or_insert_with(|| ChannelStats {
+                    channel: channel_name,
+                    cost_usd: 0.0,
+                    total_tokens: 0,
+                    request_count: 0,
+                    by_room: HashMap::new(),
+                });
+            channel_entry.cost_usd += record.usage.cost_usd;
+            channel_entry.total_tokens += record.usage.total_tokens;
+            channel_entry.request_count += 1;
+
+            let room_name = record.room.as_deref().unwrap_or("default").to_string();
+            let room_entry = channel_entry
+                .by_room
+                .entry(room_name.clone())
+                .or_insert_with(|| RoomStats {
+                    room: room_name,
+                    cost_usd: 0.0,
+                    total_tokens: 0,
+                    request_count: 0,
+                });
+            room_entry.cost_usd += record.usage.cost_usd;
+            room_entry.total_tokens += record.usage.total_tokens;
+            room_entry.request_count += 1;
+        })?;
+
+        Ok(channels.into_values().collect())
     }
 
     /// Get cost for a specific month.

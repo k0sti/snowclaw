@@ -1,34 +1,56 @@
 pub mod backend;
 pub mod chunker;
 pub mod cli;
+pub mod collective;
 pub mod cortex;
 pub mod decay;
+pub mod doc_index;
 pub mod embeddings;
+pub mod file_indexer;
 pub mod hybrid;
 pub mod hygiene;
 pub mod lucid;
 pub mod markdown;
+pub mod message_index;
 pub mod none;
+pub mod nostr;
+pub mod nostr_sqlite;
 #[cfg(feature = "memory-postgres")]
 pub mod postgres;
 pub mod qdrant;
 pub mod response_cache;
 pub mod retrieval;
 pub mod snapshot;
+pub mod snowclaw_backends;
+pub mod snowclaw_ext;
+pub mod social;
 pub mod sqlite;
 pub mod traits;
+pub mod unified_search;
 pub mod vector;
 
 #[allow(unused_imports)]
 pub use backend::{
-    classify_memory_backend, default_memory_backend_key, memory_backend_profile,
+    classify_memory_backend, default_memory_backend_key,
     selectable_memory_backends, MemoryBackendKind, MemoryBackendProfile,
 };
+
+/// Backend profile lookup that checks snowclaw-specific backends first,
+/// then falls back to upstream profiles.
+pub fn memory_backend_profile(backend: &str) -> MemoryBackendProfile {
+    if let Some(profile) = snowclaw_backends::snowclaw_backend_profile(backend) {
+        return profile;
+    }
+    backend::memory_backend_profile(backend)
+}
+
 pub use cortex::CortexMemMemory;
 pub use hybrid::SqliteQdrantHybridMemory;
 pub use lucid::LucidMemory;
 pub use markdown::MarkdownMemory;
 pub use none::NoneMemory;
+pub use collective::CollectiveMemory;
+pub use nostr_sqlite::NostrSqliteMemory;
 #[cfg(feature = "memory-postgres")]
 pub use postgres::PostgresMemory;
 pub use qdrant::QdrantMemory;
@@ -36,6 +58,7 @@ pub use response_cache::ResponseCache;
 pub use sqlite::SqliteMemory;
 pub use traits::Memory;
 #[allow(unused_imports)]
+pub use snowclaw_ext::{RecallContext, SnowclawMemoryExt};
 pub use traits::{MemoryCategory, MemoryEntry};
 
 use crate::config::{EmbeddingRouteConfig, MemoryConfig, StorageProviderConfig};
@@ -376,6 +399,46 @@ pub fn create_memory_with_storage_and_routes(
         return Ok(Box::new(SqliteQdrantHybridMemory::new(sqlite, qdrant)));
     }
 
+    // --- snowclaw backends ---
+    // Nostr backend: composite Nostr+SQLite for relay persistence + local semantic search.
+    if matches!(snowclaw_backends::classify(&backend_name), snowclaw_backends::SnowclawBackendKind::Nostr) {
+        let nsec = config.nsec.clone().or_else(|| std::env::var("SNOWCLAW_NSEC").ok());
+
+        let embedder: Arc<dyn embeddings::EmbeddingProvider> =
+            Arc::from(embeddings::create_embedding_provider(
+                &resolved_embedding.provider,
+                resolved_embedding.api_key.as_deref(),
+                &resolved_embedding.model,
+                resolved_embedding.dimensions,
+            ));
+
+        #[allow(clippy::cast_possible_truncation)]
+        let mem = NostrSqliteMemory::new(
+            config.local_relay.as_deref(),
+            config.local_relay.as_deref(),
+            nsec.as_deref(),
+            workspace_dir,
+            embedder,
+            config.vector_weight as f32,
+            config.keyword_weight as f32,
+            config.embedding_cache_size,
+            config.sqlite_open_timeout_secs,
+            config.encrypted_memory.unwrap_or(false),
+        )?;
+        return Ok(Box::new(mem));
+    }
+
+    // Collective memory: snow-memory FTS5 index with trust-ranked search.
+    if matches!(snowclaw_backends::classify(&backend_name), snowclaw_backends::SnowclawBackendKind::Collective) {
+        let nsec = config.nsec.clone().or_else(|| std::env::var("SNOWCLAW_NSEC").ok());
+        let mem = CollectiveMemory::new_with_relay(
+            workspace_dir,
+            &config.collective,
+            nsec.as_deref(),
+        )?;
+        return Ok(Box::new(mem));
+    }
+
     create_memory_with_builders(
         &backend_name,
         workspace_dir,
@@ -522,6 +585,17 @@ mod tests {
         };
         let mem = create_memory(&cfg, tmp.path(), None).unwrap();
         assert_eq!(mem.name(), "none");
+    }
+
+    #[test]
+    fn factory_collective() {
+        let tmp = TempDir::new().unwrap();
+        let cfg = MemoryConfig {
+            backend: "collective".into(),
+            ..MemoryConfig::default()
+        };
+        let mem = create_memory(&cfg, tmp.path(), None).unwrap();
+        assert_eq!(mem.name(), "collective");
     }
 
     #[test]

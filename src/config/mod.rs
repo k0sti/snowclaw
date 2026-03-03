@@ -1,4 +1,5 @@
 pub mod schema;
+pub mod snowclaw_schema;
 pub mod traits;
 
 #[allow(unused_imports)]
@@ -28,6 +29,7 @@ pub use schema::{
     SyscallAnomalyConfig, TelegramConfig, TranscriptionConfig, TunnelConfig, UrlAccessConfig,
     WasmCapabilityEscalationMode, WasmConfig, WasmModuleHashPolicy, WasmRuntimeConfig,
     WasmSecurityConfig, WebFetchConfig, WebSearchConfig, WebhookConfig, DEFAULT_MODEL_FALLBACK,
+    APP_DIR_NAME, NostrConfig, ContextVmEntry, CollectiveMemoryConfig,
 };
 
 pub fn name_and_presence<T: traits::ChannelConfig>(channel: Option<&T>) -> (&'static str, bool) {

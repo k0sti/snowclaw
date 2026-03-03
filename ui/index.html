@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Snow UI — Debug Console</title>
+  <link rel="stylesheet" href="/src/style.css">
+</head>
+<body>
+  <div id="app">
+    <nav id="sidebar">
+      <h1>Snow UI</h1>
+      <ul>
+        <li><a href="#debug" class="nav-link active" data-panel="debug">Debug Console</a></li>
+        <li><a href="#stream" class="nav-link" data-panel="stream">Memory Stream</a></li>
+        <li><a href="#search" class="nav-link" data-panel="search">Search</a></li>
+        <li><a href="#agents" class="nav-link" data-panel="agents">Agents</a></li>
+      </ul>
+      <div id="relay-status">
+        <span class="status-dot offline"></span>
+        <span id="relay-status-text">Disconnected</span>
+      </div>
+    </nav>
+    <main id="content">
+      <!-- Debug Console (default view) -->
+      <section id="panel-debug" class="panel active">
+        <h2>Debug Console</h2>
+
+        <!-- Relay Connection -->
+        <div class="section" id="relay-connect">
+          <h3>Relay Connection</h3>
+          <div class="input-row">
+            <input type="text" id="relay-url" placeholder="wss://relay.example.com" value="wss://relay.damus.io">
+            <button id="btn-connect">Connect</button>
+            <button id="btn-disconnect" disabled>Disconnect</button>
+          </div>
+          <div id="relay-info" class="info-box"></div>
+        </div>
+
+        <!-- Subscription Monitor -->
+        <div class="section" id="sub-monitor">
+          <h3>Subscriptions</h3>
+          <button id="btn-sub-memory">Subscribe: Memory Events</button>
+          <div id="sub-list" class="info-box">No active subscriptions</div>
+          <div class="counters">
+            <span>Events received: <strong id="event-count">0</strong></span>
+          </div>
+        </div>
+
+        <!-- Event Inspector -->
+        <div class="section" id="event-inspector">
+          <h3>Event Inspector</h3>
+          <textarea id="event-json" rows="8" placeholder="Paste a Nostr event JSON here..."></textarea>
+          <button id="btn-inspect">Inspect Event</button>
+          <div id="inspect-output" class="output-box"></div>
+        </div>
+
+        <!-- Raw Event Log -->
+        <div class="section" id="event-log">
+          <h3>Event Log</h3>
+          <button id="btn-clear-log">Clear</button>
+          <div id="log-entries" class="log-box"></div>
+        </div>
+      </section>
+
+      <!-- Placeholder panels -->
+      <section id="panel-stream" class="panel">
+        <h2>Memory Stream</h2>
+        <p class="placeholder">Real-time memory feed — coming soon.</p>
+      </section>
+      <section id="panel-search" class="panel">
+        <h2>Memory Search</h2>
+        <p class="placeholder">Search across collective memory — coming soon.</p>
+      </section>
+      <section id="panel-agents" class="panel">
+        <h2>Agent Directory</h2>
+        <p class="placeholder">Discover Snowclaw agents on the network — coming soon.</p>
+      </section>
+    </main>
+  </div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
