@@ -10,8 +10,7 @@ use std::sync::{atomic::AtomicU64, atomic::Ordering, Arc, LazyLock, RwLock};
 /// Compiled regexes — allocated once.
 static NSEC_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"nsec1[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{58}").unwrap());
-static HEX64_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\b[0-9a-fA-F]{64}\b").unwrap());
+static HEX64_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\b[0-9a-fA-F]{64}\b").unwrap());
 
 // ── Types ────────────────────────────────────────────────────────
 
@@ -223,7 +222,10 @@ mod tests {
         let (out, flags) = f.sanitize(&text, "test-context");
 
         assert!(!out.contains(&nsec), "nsec should be redacted");
-        assert!(out.contains("[REDACTED nsec"), "should have redaction marker");
+        assert!(
+            out.contains("[REDACTED nsec"),
+            "should have redaction marker"
+        );
         assert!(out.contains(&npub[..20]), "should contain truncated npub");
         assert_eq!(flags.len(), 1);
         assert_eq!(flags[0].kind, SecurityFlagKind::NsecDetected);

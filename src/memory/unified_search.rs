@@ -72,11 +72,7 @@ impl UnifiedHit {
 /// Results are merged and sorted by score (descending), then truncated to `limit`.
 /// Each subsystem search is best-effort — if a table doesn't exist yet,
 /// that source is silently skipped.
-pub fn unified_recall(
-    conn: &Connection,
-    query: &str,
-    limit: usize,
-) -> Result<Vec<UnifiedHit>> {
+pub fn unified_recall(conn: &Connection, query: &str, limit: usize) -> Result<Vec<UnifiedHit>> {
     if query.trim().is_empty() {
         return Ok(Vec::new());
     }
@@ -127,11 +123,7 @@ pub fn unified_recall(
 ///
 /// This is a standalone search function that doesn't require the full `SqliteMemory`
 /// struct — it operates directly on the connection.
-fn search_memories_fts(
-    conn: &Connection,
-    query: &str,
-    limit: usize,
-) -> Result<Vec<MemoryEntry>> {
+fn search_memories_fts(conn: &Connection, query: &str, limit: usize) -> Result<Vec<MemoryEntry>> {
     let fts_query: String = query
         .split_whitespace()
         .map(|w| {
@@ -188,11 +180,11 @@ fn search_memories_fts(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::doc_index;
     use super::super::message_index::{self, IndexableMessage};
     use super::super::social::{self, SocialNpub};
     use super::super::traits::MemoryCategory;
+    use super::*;
     use tempfile::TempDir;
 
     /// Create the core memories table + FTS5 inline (avoids calling private init_schema).
@@ -401,13 +393,20 @@ mod tests {
         .unwrap();
 
         let results = unified_recall(&conn, "Rust", 10).unwrap();
-        assert!(results.len() >= 3, "Expected at least 3 results from different sources, got {}", results.len());
+        assert!(
+            results.len() >= 3,
+            "Expected at least 3 results from different sources, got {}",
+            results.len()
+        );
 
         // Verify we have hits from multiple sources
         let sources: Vec<&str> = results.iter().map(|h| h.source()).collect();
         assert!(sources.contains(&"memory"), "Should contain memory hits");
         assert!(sources.contains(&"message"), "Should contain message hits");
-        assert!(sources.contains(&"document"), "Should contain document hits");
+        assert!(
+            sources.contains(&"document"),
+            "Should contain document hits"
+        );
     }
 
     #[test]
@@ -442,13 +441,8 @@ mod tests {
         )
         .unwrap();
 
-        doc_index::index_content(
-            &conn,
-            "v://doc.md",
-            "Rust language programming",
-            "document",
-        )
-        .unwrap();
+        doc_index::index_content(&conn, "v://doc.md", "Rust language programming", "document")
+            .unwrap();
 
         let results = unified_recall(&conn, "Rust language", 10).unwrap();
         // Verify descending score order

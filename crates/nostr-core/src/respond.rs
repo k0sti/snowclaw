@@ -138,7 +138,10 @@ mod tests {
     fn parse_config_event_valid() {
         let keys = Keys::generate();
         let tags = vec![
-            Tag::custom(TagKind::custom("d"), vec!["snowclaw:config:group:techteam".to_string()]),
+            Tag::custom(
+                TagKind::custom("d"),
+                vec!["snowclaw:config:group:techteam".to_string()],
+            ),
             Tag::custom(TagKind::custom("respond_mode"), vec!["all".to_string()]),
             Tag::custom(TagKind::custom("context_history"), vec!["30".to_string()]),
         ];
@@ -157,7 +160,10 @@ mod tests {
     fn parse_config_event_global() {
         let keys = Keys::generate();
         let tags = vec![
-            Tag::custom(TagKind::custom("d"), vec!["snowclaw:config:global".to_string()]),
+            Tag::custom(
+                TagKind::custom("d"),
+                vec!["snowclaw:config:global".to_string()],
+            ),
             Tag::custom(TagKind::custom("respond_mode"), vec!["owner".to_string()]),
         ];
         let event = EventBuilder::new(Kind::Custom(30078), "")
@@ -174,23 +180,41 @@ mod tests {
     #[test]
     fn apply_config_entry_scopes() {
         let mut dc = DynamicConfig::default();
-        
-        apply_config_entry(&mut dc, ("snowclaw:config:global".into(), GroupConfig {
-            respond_mode: Some(RespondMode::Owner),
-            context_history: Some(10),
-        }));
+
+        apply_config_entry(
+            &mut dc,
+            (
+                "snowclaw:config:global".into(),
+                GroupConfig {
+                    respond_mode: Some(RespondMode::Owner),
+                    context_history: Some(10),
+                },
+            ),
+        );
         assert!(dc.global.is_some());
-        
-        apply_config_entry(&mut dc, ("snowclaw:config:group:test".into(), GroupConfig {
-            respond_mode: Some(RespondMode::All),
-            context_history: None,
-        }));
+
+        apply_config_entry(
+            &mut dc,
+            (
+                "snowclaw:config:group:test".into(),
+                GroupConfig {
+                    respond_mode: Some(RespondMode::All),
+                    context_history: None,
+                },
+            ),
+        );
         assert!(dc.groups.contains_key("test"));
 
-        apply_config_entry(&mut dc, ("snowclaw:config:npub:abc123".into(), GroupConfig {
-            respond_mode: Some(RespondMode::Mention),
-            context_history: Some(5),
-        }));
+        apply_config_entry(
+            &mut dc,
+            (
+                "snowclaw:config:npub:abc123".into(),
+                GroupConfig {
+                    respond_mode: Some(RespondMode::Mention),
+                    context_history: Some(5),
+                },
+            ),
+        );
         assert!(dc.npubs.contains_key("abc123"));
     }
 }

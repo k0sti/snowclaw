@@ -1,7 +1,7 @@
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use anyhow::{Result, Context};
-use std::fs;
 use serde_json::Value;
+use std::fs;
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Config {
@@ -45,7 +45,7 @@ pub enum RespondMode {
 
 impl std::str::FromStr for RespondMode {
     type Err = String;
-    
+
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "all" => Ok(RespondMode::All),
@@ -150,9 +150,9 @@ impl Config {
         let expanded_path = shellexpand::tilde(path);
         let content = fs::read_to_string(expanded_path.as_ref())
             .with_context(|| format!("Failed to read config file: {}", path))?;
-        
-        let mut config: Config = toml::from_str(&content)
-            .with_context(|| "Failed to parse TOML config")?;
+
+        let mut config: Config =
+            toml::from_str(&content).with_context(|| "Failed to parse TOML config")?;
 
         // Apply environment variable fallback for webhook token
         if config.webhook.token.is_none() {
@@ -166,13 +166,15 @@ impl Config {
 
     pub fn load_identity(&self) -> Result<Identity> {
         let expanded_path = shellexpand::tilde(&self.identity.nsec_file);
-        let content = fs::read_to_string(expanded_path.as_ref())
-            .with_context(|| format!("Failed to read identity file: {}", self.identity.nsec_file))?;
-        
-        let json: Value = serde_json::from_str(&content)
-            .with_context(|| "Failed to parse identity JSON")?;
-        
-        let nsec = json.get("nsec")
+        let content = fs::read_to_string(expanded_path.as_ref()).with_context(|| {
+            format!("Failed to read identity file: {}", self.identity.nsec_file)
+        })?;
+
+        let json: Value =
+            serde_json::from_str(&content).with_context(|| "Failed to parse identity JSON")?;
+
+        let nsec = json
+            .get("nsec")
             .and_then(|v| v.as_str())
             .with_context(|| "Identity file must contain 'nsec' field")?;
 
@@ -210,16 +212,17 @@ impl Config {
     pub fn expand_paths(&mut self) -> Result<()> {
         // Expand identity file path
         self.identity.nsec_file = shellexpand::tilde(&self.identity.nsec_file).to_string();
-        
+
         // Expand database path
         self.cache.db_path = shellexpand::tilde(&self.cache.db_path).to_string();
-        
+
         Ok(())
     }
 
     /// Get the respond mode for a specific group (defaults to "all" if not specified)
     pub fn get_group_respond_mode(&self, group: &str) -> RespondMode {
-        self.groups.respond_modes
+        self.groups
+            .respond_modes
             .get(group)
             .and_then(|mode_str| mode_str.parse().ok())
             .unwrap_or(RespondMode::All) // Default to "all" for backward compatibility

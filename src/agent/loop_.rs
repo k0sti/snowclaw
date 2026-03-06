@@ -72,6 +72,9 @@ const MAX_TOKENS_CONTINUATION_PROMPT: &str = "Previous response was truncated by
 const MAX_TOKENS_CONTINUATION_NOTICE: &str =
     "\n\n[Response may be truncated due to continuation limits. Reply \"continue\" to resume.]";
 
+/// Default failures before memory recall is marked unavailable for the run.
+const MEMORY_RECALL_FAILURE_THRESHOLD_DEFAULT: usize = 3;
+
 /// Returned when canary token exfiltration is detected in model output.
 const CANARY_EXFILTRATION_BLOCK_MESSAGE: &str =
     "I blocked that response because it attempted to reveal protected internal context.";
@@ -79,6 +82,51 @@ const CANARY_EXFILTRATION_BLOCK_MESSAGE: &str =
 /// Minimum user-message length (in chars) for auto-save to memory.
 /// Matches the channel-side constant in `channels/mod.rs`.
 const AUTOSAVE_MIN_MESSAGE_CHARS: usize = 20;
+
+/// Safety token budget for the tool loop.  When accumulated history exceeds
+/// this estimate, the oldest non-system tool results are truncated to avoid
+/// blowing past the model context window (typically 200k tokens).
+const TOOL_LOOP_TOKEN_BUDGET: usize = 150_000;
+
+/// Rough token estimate for a chat message (~3 chars per token + 4 overhead).
+fn estimate_message_tokens(msg: &ChatMessage) -> usize {
+    (msg.content.chars().count().saturating_add(2) / 3).saturating_add(4)
+}
+
+/// Estimate total tokens across a message history.
+fn estimate_history_tokens(history: &[ChatMessage]) -> usize {
+    history.iter().map(estimate_message_tokens).sum()
+}
+
+/// Trim oversized tool results in-place when the history exceeds the token
+/// budget.  Replaces the content of the oldest tool/user-tool-result messages
+/// with a short placeholder, preserving system and regular user messages.
+fn trim_tool_results_for_budget(history: &mut [ChatMessage]) {
+    let mut total = estimate_history_tokens(history);
+    if total <= TOOL_LOOP_TOKEN_BUDGET {
+        return;
+    }
+
+    // Walk forward (oldest first), skipping system messages and the last 2
+    // messages (the most recent assistant + tool result pair).
+    let safe_end = history.len().saturating_sub(2);
+    for msg in history[..safe_end].iter_mut() {
+        if total <= TOOL_LOOP_TOKEN_BUDGET {
+            break;
+        }
+        // Only truncate tool results (role "tool") and user-wrapped tool
+        // results (role "user" with "[Tool results]" prefix).
+        let is_tool_result =
+            msg.role == "tool" || (msg.role == "user" && msg.content.starts_with("[Tool results]"));
+        if !is_tool_result {
+            continue;
+        }
+        let old_tokens = estimate_message_tokens(msg);
+        msg.content = "[truncated — output too large for context window]".to_string();
+        let new_tokens = estimate_message_tokens(msg);
+        total = total.saturating_sub(old_tokens).saturating_add(new_tokens);
+    }
+}
 
 fn filter_primary_agent_tools_or_fail(
     config: &Config,
@@ -1206,8 +1254,16 @@ pub async fn run_tool_call_loop(
     let ld_config = LOOP_DETECTION_CONFIG
         .try_with(Clone::clone)
         .unwrap_or_default();
+    let memory_recall_failure_threshold = if ld_config.failure_streak_threshold == 0 {
+        MEMORY_RECALL_FAILURE_THRESHOLD_DEFAULT
+    } else {
+        ld_config.failure_streak_threshold
+    };
     let mut loop_detector = LoopDetector::new(ld_config);
     let mut loop_detection_prompt: Option<String> = None;
+    let mut memory_recall_failures = 0usize;
+    let mut memory_recall_unavailable = false;
+    let mut memory_recall_root_error: Option<String> = None;
     let heartbeat_config = SAFETY_HEARTBEAT_CONFIG
         .try_with(Clone::clone)
         .ok()
@@ -1260,6 +1316,11 @@ pub async fn run_tool_call_loop(
         {
             return Err(ToolLoopCancelled.into());
         }
+
+        // ── Pre-flight token budget check ────────────────────────
+        // Truncate oversized old tool results so accumulated history doesn't
+        // blow past the model context window.
+        trim_tool_results_for_budget(history);
 
         let image_marker_count = multimodal::count_image_markers(history);
         let provider_supports_vision =
@@ -2107,6 +2168,42 @@ pub async fn run_tool_call_loop(
                 continue;
             }
 
+            if memory_recall_unavailable && tool_name == "memory_recall" {
+                let root = memory_recall_root_error
+                    .clone()
+                    .unwrap_or_else(|| "unknown error".to_string());
+                let blocked = format!(
+                    "Memory recall is temporarily unavailable for this run after repeated failures. \
+Root error: {root}"
+                );
+                runtime_trace::record_event(
+                    "tool_call_result",
+                    Some(channel_name),
+                    Some(provider_name),
+                    Some(active_model.as_str()),
+                    Some(&turn_id),
+                    Some(false),
+                    Some(&blocked),
+                    serde_json::json!({
+                        "iteration": iteration + 1,
+                        "tool": tool_name.clone(),
+                        "arguments": scrub_credentials(&tool_args.to_string()),
+                        "memory_recall_unavailable": true,
+                    }),
+                );
+                ordered_results[idx] = Some((
+                    tool_name.clone(),
+                    call.tool_call_id.clone(),
+                    ToolExecutionOutcome {
+                        output: blocked.clone(),
+                        success: false,
+                        error_reason: Some(blocked),
+                        duration: Duration::ZERO,
+                    },
+                ));
+                continue;
+            }
+
             // ── Approval hook ────────────────────────────────
             if let Some(mgr) = approval {
                 let non_cli_session_granted =
@@ -2396,8 +2493,42 @@ pub async fn run_tool_call_loop(
                 }
             }
 
+            let mut skip_loop_detector = false;
+            if call.name == "memory_recall" {
+                if outcome.success {
+                    memory_recall_failures = 0;
+                } else {
+                    let error_text = outcome
+                        .error_reason
+                        .clone()
+                        .filter(|text| !text.is_empty())
+                        .unwrap_or_else(|| outcome.output.clone());
+                    if memory_recall_root_error.is_none() && !error_text.is_empty() {
+                        memory_recall_root_error = Some(error_text.clone());
+                    }
+                    let next_failures = memory_recall_failures.saturating_add(1);
+                    if next_failures >= memory_recall_failure_threshold {
+                        memory_recall_unavailable = true;
+                        memory_recall_failures = next_failures;
+                        skip_loop_detector = true;
+                        let root = memory_recall_root_error
+                            .clone()
+                            .unwrap_or_else(|| error_text.clone());
+                        let blocked = format!(
+                            "Memory recall is temporarily unavailable for this run after {} failed attempts. \
+Root error: {root}",
+                            next_failures
+                        );
+                        outcome.output = blocked.clone();
+                        outcome.error_reason = Some(blocked);
+                    } else {
+                        memory_recall_failures = next_failures;
+                    }
+                }
+            }
+
             // ── Loop detection: record call ──────────────────────
-            {
+            if !skip_loop_detector {
                 let sig = tool_call_signature(&call.name, &call.arguments);
                 loop_detector.record_call(&sig.0, &sig.1, &outcome.output, outcome.success);
             }
@@ -4118,6 +4249,49 @@ mod tests {
                 success: false,
                 output: String::new(),
                 error: Some("boom".to_string()),
+            })
+        }
+    }
+
+    struct FailingMemoryRecallTool {
+        invocations: Arc<AtomicUsize>,
+    }
+
+    impl FailingMemoryRecallTool {
+        fn new(invocations: Arc<AtomicUsize>) -> Self {
+            Self { invocations }
+        }
+    }
+
+    #[async_trait]
+    impl Tool for FailingMemoryRecallTool {
+        fn name(&self) -> &str {
+            "memory_recall"
+        }
+
+        fn description(&self) -> &str {
+            "Fails memory recall for loop recovery tests"
+        }
+
+        fn parameters_schema(&self) -> serde_json::Value {
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string" }
+                },
+                "required": ["query"]
+            })
+        }
+
+        async fn execute(
+            &self,
+            _args: serde_json::Value,
+        ) -> anyhow::Result<crate::tools::ToolResult> {
+            self.invocations.fetch_add(1, Ordering::SeqCst);
+            Ok(crate::tools::ToolResult {
+                success: false,
+                output: String::new(),
+                error: Some("memory backend unavailable".to_string()),
             })
         }
     }
@@ -7630,5 +7804,68 @@ Let me check the result."#;
         let completed = tracker.render_delta();
         assert!(completed.contains("✅ shell (2s)"));
         assert!(completed.contains("❌ web_search (1s)"));
+    }
+
+    #[tokio::test]
+    async fn run_tool_call_loop_disables_memory_recall_after_failures() {
+        let provider = ScriptedProvider::from_text_responses(vec![
+            r#"<tool_call>
+{"name":"memory_recall","arguments":{"query":"first"}}
+</tool_call>"#,
+            r#"<tool_call>
+{"name":"memory_recall","arguments":{"query":"second"}}
+</tool_call>"#,
+            r#"<tool_call>
+{"name":"memory_recall","arguments":{"query":"third"}}
+</tool_call>"#,
+            r#"<tool_call>
+{"name":"memory_recall","arguments":{"query":"fourth"}}
+</tool_call>"#,
+            "done",
+        ]);
+
+        let invocations = Arc::new(AtomicUsize::new(0));
+        let tools_registry: Vec<Box<dyn Tool>> = vec![Box::new(FailingMemoryRecallTool::new(
+            Arc::clone(&invocations),
+        ))];
+        let mut history = vec![
+            ChatMessage::system("test-system"),
+            ChatMessage::user("recall memory"),
+        ];
+        let observer = NoopObserver;
+
+        let result = run_tool_call_loop(
+            &provider,
+            &mut history,
+            &tools_registry,
+            &observer,
+            "mock-provider",
+            "mock-model",
+            0.0,
+            true,
+            None,
+            "cli",
+            &crate::config::MultimodalConfig::default(),
+            6,
+            None,
+            None,
+            None,
+            &[],
+        )
+        .await
+        .expect("loop should continue after disabling memory recall");
+
+        assert_eq!(result, "done");
+        assert_eq!(
+            invocations.load(Ordering::SeqCst),
+            3,
+            "memory_recall tool should stop executing after repeated failures"
+        );
+        assert!(
+            history.iter().any(|msg| msg
+                .content
+                .contains("Memory recall is temporarily unavailable")),
+            "history should include unavailable notice"
+        );
     }
 }

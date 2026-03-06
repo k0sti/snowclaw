@@ -5,6 +5,7 @@ use crate::observability::{Observer, ObserverEvent};
 use crate::tools::Tool;
 use anyhow::Result;
 use std::time::{Duration, Instant};
+use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 
 fn find_tool<'a>(tools: &'a [Box<dyn Tool>], name: &str) -> Option<&'a dyn Tool> {
@@ -38,55 +39,83 @@ async fn execute_one_tool(
         });
     };
 
-    let tool_future = tool.execute(call_arguments);
-    let tool_result = if let Some(token) = cancellation_token {
-        tokio::select! {
-            () = token.cancelled() => return Err(ToolLoopCancelled.into()),
-            result = tool_future => result,
-        }
-    } else {
-        tool_future.await
-    };
+    let mut attempts = 0;
+    let mut first_error: Option<String> = None;
 
-    match tool_result {
-        Ok(r) => {
-            let duration = start.elapsed();
-            observer.record_event(&ObserverEvent::ToolCall {
-                tool: call_name.to_string(),
-                duration,
-                success: r.success,
-            });
-            if r.success {
-                Ok(ToolExecutionOutcome {
-                    output: scrub_credentials(&r.output),
-                    success: true,
-                    error_reason: None,
-                    duration,
-                })
-            } else {
-                let reason = r.error.unwrap_or(r.output);
-                Ok(ToolExecutionOutcome {
-                    output: format!("Error: {reason}"),
-                    success: false,
-                    error_reason: Some(scrub_credentials(&reason)),
-                    duration,
-                })
+    loop {
+        let tool_future = tool.execute(call_arguments.clone());
+        let tool_result = if let Some(token) = cancellation_token {
+            tokio::select! {
+                () = token.cancelled() => return Err(ToolLoopCancelled.into()),
+                result = tool_future => result,
             }
-        }
-        Err(e) => {
-            let duration = start.elapsed();
-            observer.record_event(&ObserverEvent::ToolCall {
-                tool: call_name.to_string(),
-                duration,
-                success: false,
-            });
-            let reason = format!("Error executing {call_name}: {e}");
-            Ok(ToolExecutionOutcome {
-                output: reason.clone(),
-                success: false,
-                error_reason: Some(scrub_credentials(&reason)),
-                duration,
-            })
+        } else {
+            tool_future.await
+        };
+
+        match tool_result {
+            Ok(r) => {
+                if r.success {
+                    let duration = start.elapsed();
+                    observer.record_event(&ObserverEvent::ToolCall {
+                        tool: call_name.to_string(),
+                        duration,
+                        success: true,
+                    });
+                    return Ok(ToolExecutionOutcome {
+                        output: scrub_credentials(&r.output),
+                        success: true,
+                        error_reason: None,
+                        duration,
+                    });
+                }
+                let reason = r.error.unwrap_or(r.output);
+                if first_error.is_none() {
+                    first_error = Some(reason.clone());
+                }
+                if is_transient_tool_error(&reason) && attempts < MAX_TRANSIENT_RETRIES {
+                    attempts += 1;
+                    backoff_sleep(attempts, cancellation_token).await?;
+                    continue;
+                }
+                let duration = start.elapsed();
+                observer.record_event(&ObserverEvent::ToolCall {
+                    tool: call_name.to_string(),
+                    duration,
+                    success: false,
+                });
+                let (output, error_reason) = finalize_error(&reason, first_error.as_deref());
+                return Ok(ToolExecutionOutcome {
+                    output,
+                    success: false,
+                    error_reason: error_reason.map(|err| scrub_credentials(&err)),
+                    duration,
+                });
+            }
+            Err(e) => {
+                let reason = format!("Error executing {call_name}: {e}");
+                if first_error.is_none() {
+                    first_error = Some(reason.clone());
+                }
+                if is_transient_tool_error(&reason) && attempts < MAX_TRANSIENT_RETRIES {
+                    attempts += 1;
+                    backoff_sleep(attempts, cancellation_token).await?;
+                    continue;
+                }
+                let duration = start.elapsed();
+                observer.record_event(&ObserverEvent::ToolCall {
+                    tool: call_name.to_string(),
+                    duration,
+                    success: false,
+                });
+                let (output, error_reason) = finalize_error(&reason, first_error.as_deref());
+                return Ok(ToolExecutionOutcome {
+                    output,
+                    success: false,
+                    error_reason: error_reason.map(|err| scrub_credentials(&err)),
+                    duration,
+                });
+            }
         }
     }
 }
@@ -96,6 +125,242 @@ pub(super) struct ToolExecutionOutcome {
     pub(super) success: bool,
     pub(super) error_reason: Option<String>,
     pub(super) duration: Duration,
+}
+
+const MAX_TRANSIENT_RETRIES: usize = 2;
+const TRANSIENT_RETRY_BACKOFF_BASE_MS: u64 = 200;
+const TRANSIENT_RETRY_BACKOFF_MAX_MS: u64 = 2_000;
+
+fn is_transient_tool_error(message: &str) -> bool {
+    let msg = message.to_lowercase();
+    let has_timeout = msg.contains("timeout") || msg.contains("timed out");
+    let has_rate_limit =
+        msg.contains("too many requests") || msg.contains("rate limit") || msg.contains("429");
+    let has_5xx = msg.contains("5xx")
+        || msg.contains("status 500")
+        || msg.contains("status=500")
+        || msg.contains("status 502")
+        || msg.contains("status=502")
+        || msg.contains("status 503")
+        || msg.contains("status=503")
+        || msg.contains("status 504")
+        || msg.contains("status=504")
+        || msg.contains("http 500")
+        || msg.contains("http 502")
+        || msg.contains("http 503")
+        || msg.contains("http 504")
+        || msg.contains("status code 5")
+        || msg.contains("http 5");
+    let has_network = msg.contains("network")
+        || msg.contains("connection")
+        || msg.contains("connect")
+        || msg.contains("dns")
+        || msg.contains("socket")
+        || msg.contains("refused")
+        || msg.contains("reset")
+        || msg.contains("unreachable");
+    has_timeout || has_rate_limit || has_5xx || has_network
+}
+
+async fn backoff_sleep(
+    attempt: usize,
+    cancellation_token: Option<&CancellationToken>,
+) -> Result<()> {
+    let exponent = attempt.saturating_sub(1).min(6) as u32;
+    let backoff_ms = (TRANSIENT_RETRY_BACKOFF_BASE_MS.saturating_mul(2u64.pow(exponent)))
+        .min(TRANSIENT_RETRY_BACKOFF_MAX_MS);
+    let delay = Duration::from_millis(backoff_ms);
+    if let Some(token) = cancellation_token {
+        tokio::select! {
+            () = token.cancelled() => return Err(ToolLoopCancelled.into()),
+            () = sleep(delay) => {}
+        }
+    } else {
+        sleep(delay).await;
+    }
+    Ok(())
+}
+
+fn finalize_error(reason: &str, first_error: Option<&str>) -> (String, Option<String>) {
+    let root = first_error.unwrap_or(reason);
+    if root != reason {
+        (
+            format!("Error: {reason} (root error: {root})"),
+            Some(root.to_string()),
+        )
+    } else {
+        (format!("Error: {reason}"), Some(root.to_string()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::observability::NoopObserver;
+    use crate::tools::{Tool, ToolResult};
+    use async_trait::async_trait;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    struct FlakyTool {
+        name: String,
+        invocations: Arc<AtomicUsize>,
+        plan: Arc<Mutex<Vec<Result<ToolResult, anyhow::Error>>>>,
+    }
+
+    impl FlakyTool {
+        fn new(
+            name: &str,
+            plan: Vec<Result<ToolResult, anyhow::Error>>,
+            invocations: Arc<AtomicUsize>,
+        ) -> Self {
+            Self {
+                name: name.to_string(),
+                invocations,
+                plan: Arc::new(Mutex::new(plan)),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl Tool for FlakyTool {
+        fn name(&self) -> &str {
+            &self.name
+        }
+
+        fn description(&self) -> &str {
+            "flaky tool for retry tests"
+        }
+
+        fn parameters_schema(&self) -> serde_json::Value {
+            serde_json::json!({"type": "object"})
+        }
+
+        async fn execute(&self, _args: serde_json::Value) -> anyhow::Result<ToolResult> {
+            self.invocations.fetch_add(1, Ordering::SeqCst);
+            let mut plan = self.plan.lock().expect("plan lock");
+            plan.remove(0)
+        }
+    }
+
+    #[tokio::test]
+    async fn execute_one_tool_retries_transient_failures() {
+        let invocations = Arc::new(AtomicUsize::new(0));
+        let tool = FlakyTool::new(
+            "flaky",
+            vec![
+                Ok(ToolResult {
+                    success: false,
+                    output: String::new(),
+                    error: Some("timeout waiting for response".to_string()),
+                }),
+                Ok(ToolResult {
+                    success: false,
+                    output: String::new(),
+                    error: Some("connection reset".to_string()),
+                }),
+                Ok(ToolResult {
+                    success: true,
+                    output: "ok".to_string(),
+                    error: None,
+                }),
+            ],
+            Arc::clone(&invocations),
+        );
+        let tools_registry: Vec<Box<dyn Tool>> = vec![Box::new(tool)];
+        let observer = NoopObserver;
+
+        let outcome = execute_one_tool(
+            "flaky",
+            serde_json::json!({}),
+            &tools_registry,
+            &observer,
+            None,
+        )
+        .await
+        .expect("tool execution should succeed after retries");
+
+        assert!(outcome.success);
+        assert_eq!(outcome.output, "ok");
+        assert_eq!(invocations.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn execute_one_tool_does_not_retry_non_transient_errors() {
+        let invocations = Arc::new(AtomicUsize::new(0));
+        let tool = FlakyTool::new(
+            "non_transient",
+            vec![Ok(ToolResult {
+                success: false,
+                output: String::new(),
+                error: Some("invalid arguments".to_string()),
+            })],
+            Arc::clone(&invocations),
+        );
+        let tools_registry: Vec<Box<dyn Tool>> = vec![Box::new(tool)];
+        let observer = NoopObserver;
+
+        let outcome = execute_one_tool(
+            "non_transient",
+            serde_json::json!({}),
+            &tools_registry,
+            &observer,
+            None,
+        )
+        .await
+        .expect("tool execution should complete");
+
+        assert!(!outcome.success);
+        assert!(outcome.output.contains("invalid arguments"));
+        assert_eq!(invocations.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn execute_one_tool_preserves_root_error() {
+        let invocations = Arc::new(AtomicUsize::new(0));
+        let tool = FlakyTool::new(
+            "always_fail",
+            vec![
+                Ok(ToolResult {
+                    success: false,
+                    output: String::new(),
+                    error: Some("timeout waiting for response".to_string()),
+                }),
+                Ok(ToolResult {
+                    success: false,
+                    output: String::new(),
+                    error: Some("connection reset".to_string()),
+                }),
+                Ok(ToolResult {
+                    success: false,
+                    output: String::new(),
+                    error: Some("connection reset".to_string()),
+                }),
+            ],
+            Arc::clone(&invocations),
+        );
+        let tools_registry: Vec<Box<dyn Tool>> = vec![Box::new(tool)];
+        let observer = NoopObserver;
+
+        let outcome = execute_one_tool(
+            "always_fail",
+            serde_json::json!({}),
+            &tools_registry,
+            &observer,
+            None,
+        )
+        .await
+        .expect("tool execution should return failure outcome");
+
+        assert!(!outcome.success);
+        let root = outcome.error_reason.unwrap_or_default();
+        assert!(
+            root.contains("timeout"),
+            "root error should be preserved: {root}"
+        );
+        assert!(outcome.output.contains("root error"));
+        assert_eq!(invocations.load(Ordering::SeqCst), 3);
+    }
 }
 
 pub(super) fn should_execute_tools_in_parallel(

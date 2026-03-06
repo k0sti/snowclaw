@@ -220,19 +220,18 @@ impl NostrMemory {
     }
 
     /// Update profile metadata for an npub. Tracks name changes in name_history.
-    pub async fn update_profile(
-        &self,
-        hex_pubkey: &str,
-        metadata: ProfileMetadata,
-    ) {
+    pub async fn update_profile(&self, hex_pubkey: &str, metadata: ProfileMetadata) {
         let mut store = self.store.write().await;
         if let Some(npub) = store.npubs.get_mut(hex_pubkey) {
             // Track display_name changes
-            let new_name = metadata.display_name.as_deref()
+            let new_name = metadata
+                .display_name
+                .as_deref()
                 .or(metadata.name.as_deref())
                 .unwrap_or(&npub.display_name);
             if new_name != npub.display_name {
-                npub.name_history.push((metadata.fetched_at, npub.display_name.clone()));
+                npub.name_history
+                    .push((metadata.fetched_at, npub.display_name.clone()));
                 npub.display_name = new_name.to_string();
             }
             npub.profile_metadata = Some(metadata);
@@ -283,8 +282,17 @@ impl NostrMemory {
             }
             if !npub.notes.is_empty() {
                 // Show last 3 notes max to keep context concise
-                let recent: Vec<&str> = npub.notes.iter().rev().take(3).map(|s| s.as_str()).collect();
-                parts.push(format!("notes: {}", recent.into_iter().rev().collect::<Vec<_>>().join("; ")));
+                let recent: Vec<&str> = npub
+                    .notes
+                    .iter()
+                    .rev()
+                    .take(3)
+                    .map(|s| s.as_str())
+                    .collect();
+                parts.push(format!(
+                    "notes: {}",
+                    recent.into_iter().rev().collect::<Vec<_>>().join("; ")
+                ));
             }
             if !parts.is_empty() {
                 ctx.push_str(&format!(
@@ -311,8 +319,10 @@ impl NostrMemory {
         // Store as a note on the agent's npub memory
         let note = format!("[{}] state: {} d={}", agent_name, status, d_tag);
         let mut store = self.store.write().await;
-        let npub = store.npubs.entry(agent_hex.to_string()).or_insert_with(|| {
-            NpubMemory {
+        let npub = store
+            .npubs
+            .entry(agent_hex.to_string())
+            .or_insert_with(|| NpubMemory {
                 npub_hex: agent_hex.to_string(),
                 display_name: agent_name.to_string(),
                 first_seen: timestamp,
@@ -322,11 +332,11 @@ impl NostrMemory {
                 last_interaction: timestamp,
                 name_history: Vec::new(),
                 profile_metadata: None,
-            }
-        });
+            });
         npub.last_interaction = timestamp;
         // Keep only last 5 state notes to avoid bloat
-        npub.notes.retain(|n| !n.starts_with(&format!("[{}] state:", agent_name)));
+        npub.notes
+            .retain(|n| !n.starts_with(&format!("[{}] state:", agent_name)));
         npub.notes.push(note);
         drop(store);
         *self.dirty.write().await = true;
@@ -374,10 +384,14 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let mem = NostrMemory::new(dir.path());
 
-        let is_new = mem.ensure_npub("aabb", "Alice", 1000, Some("techteam")).await;
+        let is_new = mem
+            .ensure_npub("aabb", "Alice", 1000, Some("techteam"))
+            .await;
         assert!(is_new);
 
-        let is_new2 = mem.ensure_npub("aabb", "Alice", 1001, Some("techteam")).await;
+        let is_new2 = mem
+            .ensure_npub("aabb", "Alice", 1001, Some("techteam"))
+            .await;
         assert!(!is_new2);
 
         let npub = mem.get_npub("aabb").await.unwrap();

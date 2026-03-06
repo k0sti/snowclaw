@@ -10,8 +10,10 @@ use std::time::Duration;
 
 /// Maximum shell command execution time before kill.
 const SHELL_TIMEOUT_SECS: u64 = 60;
-/// Maximum output size in bytes (1MB).
-const MAX_OUTPUT_BYTES: usize = 1_048_576;
+/// Maximum output size in bytes (100KB).
+/// Kept well under the LLM context window budget (~34k tokens at ~3 bytes/token)
+/// to prevent a single shell call from blowing past the 200k-token context limit.
+const MAX_OUTPUT_BYTES: usize = 102_400;
 /// Environment variables safe to pass to shell commands.
 /// Only functional variables are included — never API keys or secrets.
 const SAFE_ENV_VARS: &[&str] = &[
@@ -243,11 +245,11 @@ impl Tool for ShellTool {
                 // Truncate output to prevent OOM
                 if stdout.len() > MAX_OUTPUT_BYTES {
                     truncate_utf8_to_max_bytes(&mut stdout, MAX_OUTPUT_BYTES);
-                    stdout.push_str("\n... [output truncated at 1MB]");
+                    stdout.push_str("\n... [output truncated at 100KB]");
                 }
                 if stderr.len() > MAX_OUTPUT_BYTES {
                     truncate_utf8_to_max_bytes(&mut stderr, MAX_OUTPUT_BYTES);
-                    stderr.push_str("\n... [stderr truncated at 1MB]");
+                    stderr.push_str("\n... [stderr truncated at 100KB]");
                 }
 
                 if let Some(detector) = &self.syscall_detector {
@@ -687,10 +689,10 @@ mod tests {
     }
 
     #[test]
-    fn shell_output_limit_is_1mb() {
+    fn shell_output_limit_is_100kb() {
         assert_eq!(
-            MAX_OUTPUT_BYTES, 1_048_576,
-            "max output must be 1 MB to prevent OOM"
+            MAX_OUTPUT_BYTES, 102_400,
+            "max output must be 100 KB to stay within LLM context budget"
         );
     }
 

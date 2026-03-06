@@ -1,6 +1,6 @@
-use rusqlite::{Connection, Result as RusqliteResult, params};
-use anyhow::{Result, Context};
+use anyhow::{Context, Result};
 use nostr_sdk::{Event, EventId, PublicKey};
+use rusqlite::{params, Connection, Result as RusqliteResult};
 use std::path::Path;
 
 #[derive(Debug, Clone)]
@@ -79,8 +79,10 @@ impl EventCache {
 
     pub async fn store_event(&self, event: &Event, group_name: Option<&str>) -> Result<()> {
         let conn = Connection::open(&self.db_path)?;
-        let stored_at = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string();
-        
+        let stored_at = chrono::Utc::now()
+            .format("%Y-%m-%d %H:%M:%S UTC")
+            .to_string();
+
         conn.execute(
             r#"
             INSERT OR REPLACE INTO events 
@@ -154,7 +156,9 @@ impl EventCache {
         group_name: Option<&str>,
     ) -> Result<()> {
         let conn = Connection::open(&self.db_path)?;
-        let stored_at = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string();
+        let stored_at = chrono::Utc::now()
+            .format("%Y-%m-%d %H:%M:%S UTC")
+            .to_string();
         conn.execute(
             r#"INSERT OR REPLACE INTO events 
             (id, pubkey, created_at, kind, tags, content, sig, group_name, stored_at)
@@ -196,7 +200,8 @@ impl EventCache {
         }
 
         let mut stmt = conn.prepare(&sql)?;
-        let params_ref: Vec<&dyn rusqlite::types::ToSql> = param_values.iter().map(|p| p.as_ref()).collect();
+        let params_ref: Vec<&dyn rusqlite::types::ToSql> =
+            param_values.iter().map(|p| p.as_ref()).collect();
         let rows = stmt.query_map(params_ref.as_slice(), |row| {
             Ok(CachedEvent {
                 id: row.get(0)?,
@@ -229,21 +234,15 @@ impl EventCache {
     pub async fn cleanup(&self, retention_days: u32) -> Result<usize> {
         let conn = Connection::open(&self.db_path)?;
         let cutoff = chrono::Utc::now().timestamp() - (retention_days as i64 * 86400);
-        let deleted = conn.execute(
-            "DELETE FROM events WHERE created_at < ?1",
-            params![cutoff],
-        )?;
+        let deleted = conn.execute("DELETE FROM events WHERE created_at < ?1", params![cutoff])?;
         Ok(deleted)
     }
 
     pub async fn get_stats(&self) -> Result<CacheStats> {
         let conn = Connection::open(&self.db_path)?;
-        
-        let total_events: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM events",
-            [],
-            |row| row.get(0)
-        )?;
+
+        let total_events: i64 =
+            conn.query_row("SELECT COUNT(*) FROM events", [], |row| row.get(0))?;
 
         Ok(CacheStats {
             total_events,

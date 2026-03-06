@@ -46,11 +46,8 @@ pub(crate) async fn append_nostr_channel(
             .map(|(k, v)| (k.clone(), RespondMode::from_str(v)))
             .collect(),
         mention_names: {
-            let mut names: Vec<String> = ns
-                .mention_names
-                .iter()
-                .map(|n| n.to_lowercase())
-                .collect();
+            let mut names: Vec<String> =
+                ns.mention_names.iter().map(|n| n.to_lowercase()).collect();
             if !names.iter().any(|n| n == "snowclaw") {
                 names.push("snowclaw".to_string());
             }

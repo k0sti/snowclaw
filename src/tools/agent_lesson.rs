@@ -245,10 +245,7 @@ mod tests {
     #[tokio::test]
     async fn tool_no_db_returns_error() {
         let tool = AgentLessonTool { conn: None };
-        let result = tool
-            .execute(json!({"lesson": "test"}))
-            .await
-            .unwrap();
+        let result = tool.execute(json!({"lesson": "test"})).await.unwrap();
         assert!(!result.success);
         assert!(result.error.unwrap().contains("not available"));
     }

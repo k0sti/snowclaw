@@ -1,11 +1,11 @@
-use reqwest::Client;
-use serde::{Serialize, Deserialize};
-use anyhow::{Result, Context};
-use tokio::time::{sleep, Duration};
-use tracing::{info, warn, error, debug};
-use nostr_sdk::Event;
-use nostr_core::{MessageEntry, Mention, MentionType};
+use anyhow::{Context, Result};
 use chrono::Utc;
+use nostr_core::{Mention, MentionType, MessageEntry};
+use nostr_sdk::Event;
+use reqwest::Client;
+use serde::{Deserialize, Serialize};
+use tokio::time::{sleep, Duration};
+use tracing::{debug, error, info, warn};
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_RETRIES: u32 = 3;
@@ -88,7 +88,8 @@ impl WebhookDeliverer {
             mentions: None,
         };
 
-        self.deliver_payload(&self.group_url, &payload).await
+        self.deliver_payload(&self.group_url, &payload)
+            .await
             .with_context(|| format!("Failed to deliver group message for event {}", event.id))
     }
 
@@ -120,7 +121,8 @@ impl WebhookDeliverer {
             mentions: None,
         };
 
-        self.deliver_payload(dm_url, &payload).await
+        self.deliver_payload(dm_url, &payload)
+            .await
             .with_context(|| format!("Failed to deliver direct message for event {}", event.id))
     }
 
@@ -137,7 +139,8 @@ impl WebhookDeliverer {
         };
 
         info!("Testing group webhook: {}", self.group_url);
-        self.deliver_payload(&self.group_url, &test_payload).await
+        self.deliver_payload(&self.group_url, &test_payload)
+            .await
             .with_context(|| "Group webhook test failed")?;
 
         if let Some(dm_url) = &self.dm_url {
@@ -145,8 +148,9 @@ impl WebhookDeliverer {
             let mut dm_test_payload = test_payload.clone();
             dm_test_payload.r#type = "test_dm".to_string();
             dm_test_payload.group = None;
-            
-            self.deliver_payload(dm_url, &dm_test_payload).await
+
+            self.deliver_payload(dm_url, &dm_test_payload)
+                .await
                 .with_context(|| "DM webhook test failed")?;
         }
 
@@ -170,14 +174,20 @@ impl WebhookDeliverer {
             match request.send().await {
                 Ok(response) => {
                     let status = response.status();
-                    
+
                     if status.is_success() {
-                        debug!("Webhook delivered successfully to {} (attempt {})", url, attempt);
+                        debug!(
+                            "Webhook delivered successfully to {} (attempt {})",
+                            url, attempt
+                        );
                         return Ok(());
                     } else if status.is_client_error() {
                         // 4xx errors - don't retry
                         let error_text = response.text().await.unwrap_or_default();
-                        error!("Webhook delivery failed with client error {}: {}", status, error_text);
+                        error!(
+                            "Webhook delivery failed with client error {}: {}",
+                            status, error_text
+                        );
                         return Err(anyhow::anyhow!(
                             "Webhook delivery failed with status {}: {}",
                             status,
@@ -203,7 +213,7 @@ impl WebhookDeliverer {
                 }
                 Err(e) => {
                     warn!("Webhook request error (attempt {}): {}", attempt, e);
-                    
+
                     if attempt >= MAX_RETRIES {
                         return Err(anyhow::anyhow!(
                             "Webhook delivery failed after {} attempts: {}",
@@ -223,13 +233,13 @@ impl WebhookDeliverer {
 
     fn create_preview(&self, content: &str) -> String {
         let trimmed = content.trim();
-        
+
         if trimmed.len() <= self.preview_length {
             trimmed.to_string()
         } else {
             // Try to break at word boundary near the limit
             let mut end = self.preview_length;
-            
+
             // Look for a space within the last 20 characters
             if let Some(space_pos) = trimmed[..self.preview_length]
                 .rfind(' ')
@@ -256,7 +266,12 @@ impl WebhookDeliverer {
 
     /// Deliver group message from pre-extracted fields (no nostr_sdk types needed)
     pub async fn deliver_group_message_raw(
-        &self, event_id: &str, group: &str, author: &str, preview: &str, created_at: i64,
+        &self,
+        event_id: &str,
+        group: &str,
+        author: &str,
+        preview: &str,
+        created_at: i64,
     ) -> Result<()> {
         let payload = WebhookPayload {
             r#type: "group_message".to_string(),
@@ -273,7 +288,11 @@ impl WebhookDeliverer {
 
     /// Deliver DM from pre-extracted fields
     pub async fn deliver_dm_raw(
-        &self, event_id: &str, author: &str, preview: &str, created_at: i64,
+        &self,
+        event_id: &str,
+        author: &str,
+        preview: &str,
+        created_at: i64,
     ) -> Result<()> {
         let url = self.dm_url.as_deref().unwrap_or(&self.group_url);
         let payload = WebhookPayload {
@@ -291,38 +310,40 @@ impl WebhookDeliverer {
 
     /// Deliver group message with enhanced context and mentions
     pub async fn deliver_group_message_enhanced(
-        &self, 
-        event_id: &str, 
-        group: &str, 
-        author: &str, 
-        preview: &str, 
+        &self,
+        event_id: &str,
+        group: &str,
+        author: &str,
+        preview: &str,
         created_at: i64,
         context: Option<Vec<MessageEntry>>,
         mentions: Option<Vec<Mention>>,
     ) -> Result<()> {
         let webhook_context = context.map(|ctx| {
-            ctx.into_iter().map(|entry| {
-                ContextMessage {
+            ctx.into_iter()
+                .map(|entry| ContextMessage {
                     author: entry.author_display_name,
                     content_preview: entry.content_preview,
                     timestamp_relative: format_relative_time(entry.timestamp),
-                }
-            }).collect()
+                })
+                .collect()
         });
 
         let webhook_mentions = mentions.map(|mentions| {
-            mentions.into_iter().map(|mention| {
-                MentionInfo {
+            mentions
+                .into_iter()
+                .map(|mention| MentionInfo {
                     mention_type: match mention.mention_type {
                         MentionType::Npub => "npub".to_string(),
                         MentionType::HexPubkey => "hex_pubkey".to_string(),
                         MentionType::Nip05 => "nip05".to_string(),
                         MentionType::AtName => "at_name".to_string(),
+                        MentionType::Broadcast => "broadcast".to_string(),
                     },
                     raw_text: mention.raw_text,
                     resolved_name: mention.resolved_name,
-                }
-            }).collect()
+                })
+                .collect()
         });
 
         let payload = WebhookPayload {
@@ -349,20 +370,22 @@ impl WebhookDeliverer {
         mentions: Option<Vec<Mention>>,
     ) -> Result<()> {
         let url = self.dm_url.as_deref().unwrap_or(&self.group_url);
-        
+
         let webhook_mentions = mentions.map(|mentions| {
-            mentions.into_iter().map(|mention| {
-                MentionInfo {
+            mentions
+                .into_iter()
+                .map(|mention| MentionInfo {
                     mention_type: match mention.mention_type {
                         MentionType::Npub => "npub".to_string(),
                         MentionType::HexPubkey => "hex_pubkey".to_string(),
                         MentionType::Nip05 => "nip05".to_string(),
                         MentionType::AtName => "at_name".to_string(),
+                        MentionType::Broadcast => "broadcast".to_string(),
                     },
                     raw_text: mention.raw_text,
                     resolved_name: mention.resolved_name,
-                }
-            }).collect()
+                })
+                .collect()
         });
 
         let payload = WebhookPayload {
@@ -384,7 +407,7 @@ impl WebhookDeliverer {
 fn format_relative_time(timestamp: i64) -> String {
     let now = Utc::now().timestamp();
     let diff = now - timestamp;
-    
+
     if diff < 60 {
         "now".to_string()
     } else if diff < 3600 {

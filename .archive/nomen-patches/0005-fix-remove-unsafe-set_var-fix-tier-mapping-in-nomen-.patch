@@ -1,0 +1,53 @@
+From 70caa36340b1dff943751ac3e421dd0fc7a2e64c Mon Sep 17 00:00:00 2001
+From: kosti <koshdot@proton.me>
+Date: Sun, 8 Mar 2026 00:35:17 +0200
+Subject: [PATCH 05/13] fix: remove unsafe set_var, fix tier mapping in nomen
+ adapter
+
+---
+ src/memory/mod.rs           | 8 +-------
+ src/memory/nomen_adapter.rs | 2 --
+ 2 files changed, 1 insertion(+), 9 deletions(-)
+
+diff --git a/src/memory/mod.rs b/src/memory/mod.rs
+index a9820d16..bfb20936 100644
+--- a/src/memory/mod.rs
++++ b/src/memory/mod.rs
+@@ -440,12 +440,6 @@ pub fn create_memory_with_storage_and_routes(
+ 
+         // Map Snowclaw embedding config to Nomen's EmbeddingConfig.
+         let embedding = if resolved_embedding.provider != "none" {
+-            // Nomen reads API key from env var. Set a dedicated env var with the
+-            // resolved key so Nomen's embedder can pick it up.
+-            let api_key_env = "_NOMEN_EMBED_KEY";
+-            if let Some(ref key) = resolved_embedding.api_key {
+-                std::env::set_var(api_key_env, key);
+-            }
+             let (provider, base_url) = match resolved_embedding.provider.strip_prefix("custom:") {
+                 Some(url) => ("openai".to_string(), Some(url.to_string())),
+                 None => (resolved_embedding.provider.clone(), None),
+@@ -453,7 +447,7 @@ pub fn create_memory_with_storage_and_routes(
+             Some(nomen::config::EmbeddingConfig {
+                 provider,
+                 model: resolved_embedding.model.clone(),
+-                api_key_env: api_key_env.to_string(),
++                api_key: resolved_embedding.api_key.clone(),
+                 base_url,
+                 dimensions: resolved_embedding.dimensions,
+                 ..Default::default()
+diff --git a/src/memory/nomen_adapter.rs b/src/memory/nomen_adapter.rs
+index 9e0b798d..3ac00d0f 100644
+--- a/src/memory/nomen_adapter.rs
++++ b/src/memory/nomen_adapter.rs
+@@ -75,8 +75,6 @@ fn category_to_tier(category: &MemoryCategory) -> String {
+ fn tier_to_category(tier: &str) -> MemoryCategory {
+     match tier {
+         "personal" | "internal" => MemoryCategory::Core,
+-        "shared" | "public" => MemoryCategory::Core,
+-        other if other.starts_with("group:") => MemoryCategory::Custom(other.to_string()),
+         other => MemoryCategory::Custom(other.to_string()),
+     }
+ }
+-- 
+2.52.0
+

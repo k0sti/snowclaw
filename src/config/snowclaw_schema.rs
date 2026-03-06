@@ -232,10 +232,26 @@ impl CollectiveMemoryConfig {
                     trust: s.trust,
                 })
                 .collect(),
-            tier1: if self.tier1.is_empty() { sm_defaults.tier1 } else { self.tier1.clone() },
-            tier2: if self.tier2.is_empty() { sm_defaults.tier2 } else { self.tier2.clone() },
-            tier3: if self.tier3.is_empty() { sm_defaults.tier3 } else { self.tier3.clone() },
-            tier4: if self.tier4.is_empty() { sm_defaults.tier4 } else { self.tier4.clone() },
+            tier1: if self.tier1.is_empty() {
+                sm_defaults.tier1
+            } else {
+                self.tier1.clone()
+            },
+            tier2: if self.tier2.is_empty() {
+                sm_defaults.tier2
+            } else {
+                self.tier2.clone()
+            },
+            tier3: if self.tier3.is_empty() {
+                sm_defaults.tier3
+            } else {
+                self.tier3.clone()
+            },
+            tier4: if self.tier4.is_empty() {
+                sm_defaults.tier4
+            } else {
+                self.tier4.clone()
+            },
             relays_public: self.relay_urls.clone(),
             relays_group: vec![],
         }

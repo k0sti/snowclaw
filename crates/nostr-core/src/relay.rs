@@ -73,14 +73,19 @@ impl RelayClient {
 
     /// Send a group message (kind 9) to a NIP-29 group.
     pub async fn send_group_message(&self, group_id: &str, content: &str) -> Result<EventId> {
-        let builder = EventBuilder::new(Kind::Custom(9), content)
-            .tag(Tag::custom(TagKind::custom("h"), vec![group_id.to_string()]));
+        let builder = EventBuilder::new(Kind::Custom(9), content).tag(Tag::custom(
+            TagKind::custom("h"),
+            vec![group_id.to_string()],
+        ));
         self.send_event_builder(builder).await
     }
 
     /// Send a direct message using NIP-17 (gift wrap).
     pub async fn send_dm(&self, recipient: &PublicKey, content: &str) -> Result<EventId> {
-        let output = self.client.send_private_msg(*recipient, content, None).await?;
+        let output = self
+            .client
+            .send_private_msg(*recipient, content, None)
+            .await?;
         Ok(output.val)
     }
 
@@ -138,7 +143,10 @@ mod tests {
     fn extract_group_from_tags() {
         let keys = Keys::generate();
         let event = EventBuilder::new(Kind::Custom(9), "test message")
-            .tag(Tag::custom(TagKind::custom("h"), vec!["test-group".to_string()]))
+            .tag(Tag::custom(
+                TagKind::custom("h"),
+                vec!["test-group".to_string()],
+            ))
             .sign_with_keys(&keys)
             .unwrap();
 

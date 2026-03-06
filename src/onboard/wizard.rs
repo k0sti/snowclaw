@@ -523,6 +523,7 @@ fn memory_config_defaults_for_backend(backend: &str) -> MemoryConfig {
         embedding_api_key: None,
         indexed_paths: Vec::new(),
         index_interval_minutes: 30,
+        nomen_socket_path: None,
         collective: crate::config::CollectiveMemoryConfig::default(),
     }
 }
@@ -7312,7 +7313,9 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let workspace_root = tmp.path().join("zeroclaw-data");
         let workspace_dir = workspace_root.join("workspace");
-        let expected_config_path = workspace_root.join(crate::config::APP_DIR_NAME).join("config.toml");
+        let expected_config_path = workspace_root
+            .join(crate::config::APP_DIR_NAME)
+            .join("config.toml");
 
         let _workspace_env = EnvVarGuard::set(
             "ZEROCLAW_WORKSPACE",
@@ -9041,7 +9044,8 @@ mod tests {
         assert_eq!(backend_key_from_choice(2), "lucid");
         assert_eq!(backend_key_from_choice(3), "cortex-mem");
         assert_eq!(backend_key_from_choice(4), "markdown");
-        assert_eq!(backend_key_from_choice(5), "none");
+        assert_eq!(backend_key_from_choice(5), "nomen");
+        assert_eq!(backend_key_from_choice(6), "none");
         assert_eq!(backend_key_from_choice(999), "sqlite");
     }
 

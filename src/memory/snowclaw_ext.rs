@@ -56,10 +56,7 @@ pub trait SnowclawMemoryExt: Memory {
     /// Tier direction: Private -> Group -> Public. Demotions are rejected.
     /// Default implementation returns an error for backends that don't support promotion.
     async fn promote(&self, _key: &str, _new_tier: MemoryTier) -> anyhow::Result<()> {
-        anyhow::bail!(
-            "{} backend does not support memory promotion",
-            self.name()
-        )
+        anyhow::bail!("{} backend does not support memory promotion", self.name())
     }
 }
 

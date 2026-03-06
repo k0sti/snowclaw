@@ -53,8 +53,7 @@ pub fn read_records(path: &Path) -> Result<Vec<CostRecord>> {
         return Ok(Vec::new());
     }
 
-    let file =
-        File::open(path).with_context(|| format!("Failed to open {}", path.display()))?;
+    let file = File::open(path).with_context(|| format!("Failed to open {}", path.display()))?;
     let reader = BufReader::new(file);
     let mut records = Vec::new();
 
@@ -83,8 +82,8 @@ pub fn build_filter(
 
     let (start_date, end_date) = match (date, period) {
         (Some(d), _) => {
-            let parsed =
-                NaiveDate::parse_from_str(d, "%Y-%m-%d").context("Invalid date format, expected YYYY-MM-DD")?;
+            let parsed = NaiveDate::parse_from_str(d, "%Y-%m-%d")
+                .context("Invalid date format, expected YYYY-MM-DD")?;
             match period.unwrap_or("day") {
                 "week" => {
                     let end = parsed + chrono::Duration::days(6);
@@ -111,8 +110,7 @@ pub fn build_filter(
             (start, today)
         }
         (None, Some("month")) => {
-            let start =
-                NaiveDate::from_ymd_opt(today.year(), today.month(), 1).unwrap_or(today);
+            let start = NaiveDate::from_ymd_opt(today.year(), today.month(), 1).unwrap_or(today);
             (start, today)
         }
         _ => (today, today),
@@ -202,7 +200,11 @@ pub fn aggregate(records: &[CostRecord], filter: &StatsFilter) -> StatsResult {
             cost,
         })
         .collect();
-    by_channel_room.sort_by(|a, b| b.cost.partial_cmp(&a.cost).unwrap_or(std::cmp::Ordering::Equal));
+    by_channel_room.sort_by(|a, b| {
+        b.cost
+            .partial_cmp(&a.cost)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let breakdown = if has_breakdown {
         let request_count = filtered.len().max(1) as u64;
@@ -325,7 +327,9 @@ pub fn print_stats(result: &StatsResult) {
         for (name, avg_bytes, pct) in &bd.categories {
             println!(
                 "  {:<20} {:>8} bytes ({:.0}%)",
-                name, fmt_num(*avg_bytes), pct
+                name,
+                fmt_num(*avg_bytes),
+                pct
             );
         }
         println!();

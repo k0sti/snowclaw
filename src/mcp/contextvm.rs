@@ -119,11 +119,8 @@ impl McpTransport for NostrTransport {
         )
         .map_err(|e| anyhow::anyhow!("NIP-44 encrypt error: {e}"))?;
 
-        let event = EventBuilder::new(
-            Kind::Custom(kinds::ENCRYPTED_MESSAGE),
-            encrypted,
-        )
-        .tag(Tag::public_key(self.server_pubkey));
+        let event = EventBuilder::new(Kind::Custom(kinds::ENCRYPTED_MESSAGE), encrypted)
+            .tag(Tag::public_key(self.server_pubkey));
 
         self.client
             .send_event_builder(event)
@@ -191,13 +188,10 @@ impl McpContextVmBridge {
         let client = Arc::new(client);
 
         // Discover ContextVM servers via NIP-89 app handler events
-        let servers = discover_servers(&client, &config.server_filter, config.discovery_timeout)
-            .await?;
+        let servers =
+            discover_servers(&client, &config.server_filter, config.discovery_timeout).await?;
 
-        info!(
-            server_count = servers.len(),
-            "Discovered ContextVM servers"
-        );
+        info!(server_count = servers.len(), "Discovered ContextVM servers");
 
         let mut all_tools: Vec<Box<dyn Tool>> = Vec::new();
 
@@ -296,15 +290,11 @@ async fn discover_servers(
         });
 
         // Check if this is actually a ContextVM/MCP announcement
-        let is_contextvm = event
-            .tags
-            .iter()
-            .any(|tag| {
-                let t = tag.as_slice();
-                t.len() >= 2
-                    && (t[1].contains("mcp") || t[1].contains("contextvm") || t[1].contains("MCP"))
-            })
-            || event.content.contains("mcp")
+        let is_contextvm = event.tags.iter().any(|tag| {
+            let t = tag.as_slice();
+            t.len() >= 2
+                && (t[1].contains("mcp") || t[1].contains("contextvm") || t[1].contains("MCP"))
+        }) || event.content.contains("mcp")
             || event.content.contains("contextvm");
 
         if !is_contextvm && filter_pubkeys.is_empty() {

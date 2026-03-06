@@ -43,10 +43,7 @@ fn model_tier(model: &str, config: &MemoryConfig) -> u8 {
 ///
 /// Each memory gets an effective score = relevance * source_trust * tier_weight.
 /// Results are sorted by effective_score descending, then by created_at descending.
-pub fn rank_memories(
-    memories: Vec<(Memory, f64)>,
-    config: &MemoryConfig,
-) -> Vec<SearchResult> {
+pub fn rank_memories(memories: Vec<(Memory, f64)>, config: &MemoryConfig) -> Vec<SearchResult> {
     let mut results: Vec<SearchResult> = memories
         .into_iter()
         .map(|(memory, relevance)| {
@@ -179,8 +176,14 @@ mod tests {
     fn rank_prefers_higher_trust_source() {
         let config = test_config();
         let memories = vec![
-            (make_memory("a", "community_agent", "anthropic/claude-opus-4-6", 100), 1.0),
-            (make_memory("b", "trusted_agent", "anthropic/claude-opus-4-6", 100), 1.0),
+            (
+                make_memory("a", "community_agent", "anthropic/claude-opus-4-6", 100),
+                1.0,
+            ),
+            (
+                make_memory("b", "trusted_agent", "anthropic/claude-opus-4-6", 100),
+                1.0,
+            ),
         ];
 
         let ranked = rank_memories(memories, &config);
@@ -192,8 +195,14 @@ mod tests {
     fn rank_prefers_higher_tier_model() {
         let config = test_config();
         let memories = vec![
-            (make_memory("a", "trusted_agent", "meta/llama-70b", 100), 1.0),
-            (make_memory("b", "trusted_agent", "anthropic/claude-opus-4-6", 100), 1.0),
+            (
+                make_memory("a", "trusted_agent", "meta/llama-70b", 100),
+                1.0,
+            ),
+            (
+                make_memory("b", "trusted_agent", "anthropic/claude-opus-4-6", 100),
+                1.0,
+            ),
         ];
 
         let ranked = rank_memories(memories, &config);
@@ -204,8 +213,14 @@ mod tests {
     fn rank_prefers_newer_on_tie() {
         let config = test_config();
         let memories = vec![
-            (make_memory("a", "trusted_agent", "anthropic/claude-opus-4-6", 100), 1.0),
-            (make_memory("b", "trusted_agent", "anthropic/claude-opus-4-6", 200), 1.0),
+            (
+                make_memory("a", "trusted_agent", "anthropic/claude-opus-4-6", 100),
+                1.0,
+            ),
+            (
+                make_memory("b", "trusted_agent", "anthropic/claude-opus-4-6", 200),
+                1.0,
+            ),
         ];
 
         let ranked = rank_memories(memories, &config);
@@ -215,9 +230,10 @@ mod tests {
     #[test]
     fn unknown_source_gets_zero_trust() {
         let config = test_config();
-        let memories = vec![
-            (make_memory("a", "unknown_agent", "anthropic/claude-opus-4-6", 100), 1.0),
-        ];
+        let memories = vec![(
+            make_memory("a", "unknown_agent", "anthropic/claude-opus-4-6", 100),
+            1.0,
+        )];
 
         let ranked = rank_memories(memories, &config);
         assert_eq!(ranked[0].effective_score, 0.0);

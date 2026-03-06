@@ -2,10 +2,7 @@
 /// Returns (0.0, 0.0) for unknown models — cost will be recorded as $0.
 pub fn model_pricing(model: &str) -> (f64, f64) {
     // Normalize: strip provider prefix (e.g. "anthropic/claude-sonnet-4-20250514" → "claude-sonnet-4-20250514")
-    let name = model
-        .rsplit_once('/')
-        .map(|(_, m)| m)
-        .unwrap_or(model);
+    let name = model.rsplit_once('/').map(|(_, m)| m).unwrap_or(model);
 
     match name {
         // Anthropic Claude 4.x / Opus
@@ -17,9 +14,7 @@ pub fn model_pricing(model: &str) -> (f64, f64) {
             (3.0, 15.0)
         }
         // Anthropic Claude 3.5 Haiku
-        n if n.starts_with("claude-3-5-haiku") || n.starts_with("claude-3.5-haiku") => {
-            (0.80, 4.0)
-        }
+        n if n.starts_with("claude-3-5-haiku") || n.starts_with("claude-3.5-haiku") => (0.80, 4.0),
         // Anthropic Claude 3 Opus
         n if n.starts_with("claude-3-opus") => (15.0, 75.0),
         // Anthropic Claude 3 Sonnet

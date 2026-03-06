@@ -1,3 +1,4 @@
+use anyhow::{Context, Result};
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
@@ -5,13 +6,12 @@ use axum::{
     routing::{get, post},
     Router,
 };
+use nostr_sdk::{EventId, PublicKey};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use anyhow::{Result, Context};
-use nostr_sdk::{EventId, PublicKey};
-use tokio::net::TcpListener;
-use tracing::{info, error, debug};
 use std::sync::Arc;
+use tokio::net::TcpListener;
+use tracing::{debug, error, info};
 
 use crate::bridge::BridgeState;
 
@@ -120,12 +120,14 @@ impl ApiServer {
             .route("/health", get(handle_health))
             .with_state(bridge_state);
 
-        let listener = TcpListener::bind(&self.bind_address).await
+        let listener = TcpListener::bind(&self.bind_address)
+            .await
             .with_context(|| format!("Failed to bind to {}", self.bind_address))?;
 
         info!("API server listening on {}", self.bind_address);
-        
-        axum::serve(listener, app).await
+
+        axum::serve(listener, app)
+            .await
             .with_context(|| "API server error")?;
 
         Ok(())
@@ -171,7 +173,9 @@ async fn handle_send(
             }
         };
 
-        bridge.send_direct_message(&recipient, &request.content).await
+        bridge
+            .send_direct_message(&recipient, &request.content)
+            .await
     } else if request.kind == 9 {
         // Group message
         let group = match request.group {
@@ -228,15 +232,18 @@ async fn handle_events(
         None
     };
 
-    match bridge.query_events(
-        params.group.as_deref(),
-        author_pubkey.as_ref(),
-        params.since,
-        Some(params.limit),
-    ).await {
+    match bridge
+        .query_events(
+            params.group.as_deref(),
+            author_pubkey.as_ref(),
+            params.since,
+            Some(params.limit),
+        )
+        .await
+    {
         Ok(cached_events) => {
             let mut events = Vec::new();
-            
+
             for cached_event in cached_events {
                 let mut event_response = EventResponse {
                     id: cached_event.id,
@@ -258,7 +265,10 @@ async fn handle_events(
 
                 // Decrypt DM content if it's a kind 4 event
                 if cached_event.kind == 4 {
-                    if let Ok(decrypted) = bridge.decrypt_dm_content(&cached_event.content, &cached_event.pubkey).await {
+                    if let Ok(decrypted) = bridge
+                        .decrypt_dm_content(&cached_event.content, &cached_event.pubkey)
+                        .await
+                    {
                         event_response.decrypted_content = Some(decrypted);
                     }
                 }
@@ -270,7 +280,7 @@ async fn handle_events(
                 count: events.len(),
                 events,
             }))
-        },
+        }
         Err(e) => {
             error!("Failed to query events: {}", e);
             Err(StatusCode::INTERNAL_SERVER_ERROR)
@@ -311,13 +321,16 @@ async fn handle_event_by_id(
 
             // Decrypt DM content if it's a kind 4 event
             if cached_event.kind == 4 {
-                if let Ok(decrypted) = bridge.decrypt_dm_content(&cached_event.content, &cached_event.pubkey).await {
+                if let Ok(decrypted) = bridge
+                    .decrypt_dm_content(&cached_event.content, &cached_event.pubkey)
+                    .await
+                {
                     event_response.decrypted_content = Some(decrypted);
                 }
             }
 
             Ok(Json(event_response))
-        },
+        }
         Ok(None) => Err(StatusCode::NOT_FOUND),
         Err(e) => {
             error!("Failed to get event {}: {}", id, e);
@@ -347,7 +360,7 @@ async fn handle_stats(
                     subscribed_groups: subscribed_groups.into_iter().collect(),
                 },
             }))
-        },
+        }
         Err(e) => {
             error!("Failed to get stats: {}", e);
             Err(StatusCode::INTERNAL_SERVER_ERROR)
@@ -355,9 +368,7 @@ async fn handle_stats(
     }
 }
 
-async fn handle_health(
-    State(_bridge): State<Arc<BridgeState>>,
-) -> Json<HealthResponse> {
+async fn handle_health(State(_bridge): State<Arc<BridgeState>>) -> Json<HealthResponse> {
     Json(HealthResponse {
         status: "healthy".to_string(),
         time: chrono::Utc::now().timestamp(),

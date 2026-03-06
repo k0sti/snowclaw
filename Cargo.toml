@@ -154,6 +154,9 @@ nostr-core = { path = "crates/nostr-core" }
 # Collective memory (snow-memory)
 snow-memory = { path = "crates/snow-memory" }
 
+# Nomen — Nostr-native agent memory (SurrealDB + vector search + relay sync)
+nomen-wire = { path = "../nomen/nomen-wire" }
+
 # Temporary directory creation (for self-update)
 tempfile = "3.14"
 

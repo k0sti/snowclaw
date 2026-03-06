@@ -62,9 +62,15 @@ impl std::fmt::Display for ConversionError {
                 write!(f, "invalid tag '{}': {}", tag, reason)
             }
             ConversionError::InvalidContent(e) => write!(f, "invalid content: {}", e),
-            ConversionError::WrongKind(k) => write!(f, "wrong event kind: {}, expected {}", k, KIND_APP_SPECIFIC),
+            ConversionError::WrongKind(k) => {
+                write!(f, "wrong event kind: {}, expected {}", k, KIND_APP_SPECIFIC)
+            }
             ConversionError::InvalidDTag(d) => {
-                write!(f, "invalid d-tag: '{}', expected prefix '{}'", d, D_TAG_PREFIX)
+                write!(
+                    f,
+                    "invalid d-tag: '{}', expected prefix '{}'",
+                    d, D_TAG_PREFIX
+                )
             }
         }
     }
@@ -152,10 +158,12 @@ pub fn memory_from_event(event: &MemoryEvent) -> Result<Memory, ConversionError>
 
     let model = event.require_tag(TAG_MODEL)?.to_string();
     let confidence_str = event.require_tag(TAG_CONFIDENCE)?;
-    let confidence: f64 = confidence_str.parse().map_err(|_| ConversionError::InvalidTag {
-        tag: TAG_CONFIDENCE.to_string(),
-        reason: format!("not a valid f64: {}", confidence_str),
-    })?;
+    let confidence: f64 = confidence_str
+        .parse()
+        .map_err(|_| ConversionError::InvalidTag {
+            tag: TAG_CONFIDENCE.to_string(),
+            reason: format!("not a valid f64: {}", confidence_str),
+        })?;
 
     if !(0.0..=1.0).contains(&confidence) {
         return Err(ConversionError::InvalidTag {
@@ -166,10 +174,12 @@ pub fn memory_from_event(event: &MemoryEvent) -> Result<Memory, ConversionError>
 
     let source = event.require_tag(TAG_SOURCE)?.to_string();
     let version_str = event.require_tag(TAG_VERSION)?;
-    let version: u32 = version_str.parse().map_err(|_| ConversionError::InvalidTag {
-        tag: TAG_VERSION.to_string(),
-        reason: format!("not a valid u32: {}", version_str),
-    })?;
+    let version: u32 = version_str
+        .parse()
+        .map_err(|_| ConversionError::InvalidTag {
+            tag: TAG_VERSION.to_string(),
+            reason: format!("not a valid u32: {}", version_str),
+        })?;
 
     let supersedes = event.get_tag(TAG_SUPERSEDES).map(|s| s.to_string());
 
@@ -203,8 +213,14 @@ pub fn memory_from_event(event: &MemoryEvent) -> Result<Memory, ConversionError>
 /// Convert an AgentProfile to a kind-0-style metadata JSON string.
 pub fn profile_to_metadata(profile: &AgentProfile) -> String {
     let mut map = serde_json::Map::new();
-    map.insert("name".to_string(), serde_json::Value::String(profile.name.clone()));
-    map.insert("about".to_string(), serde_json::Value::String(profile.about.clone()));
+    map.insert(
+        "name".to_string(),
+        serde_json::Value::String(profile.name.clone()),
+    );
+    map.insert(
+        "about".to_string(),
+        serde_json::Value::String(profile.about.clone()),
+    );
     map.insert(
         "snow:model".to_string(),
         serde_json::Value::String(profile.model.clone()),
@@ -347,7 +363,8 @@ mod tests {
             tier: MemoryTier::Public,
             topic: "rust/error-handling".to_string(),
             summary: "Use anyhow for application errors".to_string(),
-            detail: "In application code, prefer anyhow::Result for ergonomic error propagation.".to_string(),
+            detail: "In application code, prefer anyhow::Result for ergonomic error propagation."
+                .to_string(),
             context: None,
             source: "deadbeef".to_string(),
             model: "anthropic/claude-opus-4-6".to_string(),

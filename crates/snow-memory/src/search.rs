@@ -106,8 +106,9 @@ impl SqliteMemoryIndex {
 
         let tier_pattern = tier_filter.map(|t| format!("{}%", t));
 
-        let (sql, use_tier) = if tier_pattern.is_some() {
-            ("SELECT m.id, m.tier, m.topic, m.summary, m.detail, m.context, m.source, m.model,
+        let (sql, use_tier) =
+            if tier_pattern.is_some() {
+                ("SELECT m.id, m.tier, m.topic, m.summary, m.detail, m.context, m.source, m.model,
                     m.confidence, m.supersedes, m.version, m.tags, m.created_at,
                     bm25(memories_fts) as rank
              FROM memories_fts f
@@ -115,8 +116,8 @@ impl SqliteMemoryIndex {
              WHERE memories_fts MATCH ?1 AND m.tier LIKE ?2
              ORDER BY rank
              LIMIT ?3", true)
-        } else {
-            ("SELECT m.id, m.tier, m.topic, m.summary, m.detail, m.context, m.source, m.model,
+            } else {
+                ("SELECT m.id, m.tier, m.topic, m.summary, m.detail, m.context, m.source, m.model,
                     m.confidence, m.supersedes, m.version, m.tags, m.created_at,
                     bm25(memories_fts) as rank
              FROM memories_fts f
@@ -124,7 +125,7 @@ impl SqliteMemoryIndex {
              WHERE memories_fts MATCH ?1
              ORDER BY rank
              LIMIT ?2", false)
-        };
+            };
 
         let mut stmt = self.conn.prepare(sql)?;
         let mut results = Vec::new();
@@ -180,9 +181,7 @@ impl SqliteMemoryIndex {
              FROM memories WHERE id = ?1",
         )?;
 
-        let mut rows = stmt.query_map(params![id], |row| {
-            Self::row_to_memory(row)
-        })?;
+        let mut rows = stmt.query_map(params![id], |row| Self::row_to_memory(row))?;
 
         match rows.next() {
             Some(Ok(m)) => Ok(Some(m)),
@@ -224,36 +223,39 @@ impl SqliteMemoryIndex {
     /// Count total memories.
     pub fn count(&self) -> SqlResult<usize> {
         self.conn
-            .query_row("SELECT COUNT(*) FROM memories", [], |row| row.get::<_, usize>(0))
+            .query_row("SELECT COUNT(*) FROM memories", [], |row| {
+                row.get::<_, usize>(0)
+            })
     }
 
     /// Delete a memory by topic. Returns true if a row was deleted.
     pub fn delete_by_topic(&self, topic: &str) -> SqlResult<bool> {
-        let count = self.conn.execute(
-            "DELETE FROM memories WHERE topic = ?1",
-            params![topic],
-        )?;
+        let count = self
+            .conn
+            .execute("DELETE FROM memories WHERE topic = ?1", params![topic])?;
         Ok(count > 0)
     }
 
     /// List all memories, optionally filtered by tier prefix, up to `limit`.
-    pub fn list_all(
-        &self,
-        tier_filter: Option<&str>,
-        limit: usize,
-    ) -> SqlResult<Vec<Memory>> {
+    pub fn list_all(&self, tier_filter: Option<&str>, limit: usize) -> SqlResult<Vec<Memory>> {
         let (sql, use_tier) = if tier_filter.is_some() {
-            ("SELECT id, tier, topic, summary, detail, context, source, model,
+            (
+                "SELECT id, tier, topic, summary, detail, context, source, model,
                     confidence, supersedes, version, tags, created_at
              FROM memories WHERE tier LIKE ?1
              ORDER BY created_at DESC
-             LIMIT ?2", true)
+             LIMIT ?2",
+                true,
+            )
         } else {
-            ("SELECT id, tier, topic, summary, detail, context, source, model,
+            (
+                "SELECT id, tier, topic, summary, detail, context, source, model,
                     confidence, supersedes, version, tags, created_at
              FROM memories
              ORDER BY created_at DESC
-             LIMIT ?1", false)
+             LIMIT ?1",
+                false,
+            )
         };
 
         let mut stmt = self.conn.prepare(sql)?;
@@ -286,8 +288,7 @@ impl SqliteMemoryIndex {
 
     /// Query a single text value from a raw SQL statement.
     pub fn query_raw(&self, sql: &str) -> SqlResult<String> {
-        self.conn
-            .query_row(sql, [], |row| row.get::<_, String>(0))
+        self.conn.query_row(sql, [], |row| row.get::<_, String>(0))
     }
 
     fn row_to_memory(row: &rusqlite::Row<'_>) -> rusqlite::Result<Memory> {
@@ -306,7 +307,11 @@ impl SqliteMemoryIndex {
             confidence: row.get(8)?,
             supersedes: row.get(9)?,
             version: row.get(10)?,
-            tags: tags_str.split(',').filter(|s| !s.is_empty()).map(String::from).collect(),
+            tags: tags_str
+                .split(',')
+                .filter(|s| !s.is_empty())
+                .map(String::from)
+                .collect(),
             created_at: row.get(12)?,
         })
     }
@@ -355,7 +360,12 @@ mod tests {
     #[test]
     fn test_upsert_and_get() {
         let idx = SqliteMemoryIndex::open_in_memory().unwrap();
-        let m = make_memory("abc123", "rust/errors", "How to handle errors in Rust", "deadbeef");
+        let m = make_memory(
+            "abc123",
+            "rust/errors",
+            "How to handle errors in Rust",
+            "deadbeef",
+        );
         idx.upsert(&m, None).unwrap();
 
         let got = idx.get("abc123").unwrap().unwrap();
@@ -366,9 +376,26 @@ mod tests {
     #[test]
     fn test_fts_search() {
         let idx = SqliteMemoryIndex::open_in_memory().unwrap();
-        idx.upsert(&make_memory("1", "rust/errors", "Error handling with Result type", "aaa"), None).unwrap();
-        idx.upsert(&make_memory("2", "nostr/nip44", "NIP-44 encryption for private messages", "bbb"), None).unwrap();
-        idx.upsert(&make_memory("3", "rust/async", "Async runtime with tokio", "aaa"), None).unwrap();
+        idx.upsert(
+            &make_memory("1", "rust/errors", "Error handling with Result type", "aaa"),
+            None,
+        )
+        .unwrap();
+        idx.upsert(
+            &make_memory(
+                "2",
+                "nostr/nip44",
+                "NIP-44 encryption for private messages",
+                "bbb",
+            ),
+            None,
+        )
+        .unwrap();
+        idx.upsert(
+            &make_memory("3", "rust/async", "Async runtime with tokio", "aaa"),
+            None,
+        )
+        .unwrap();
 
         let results = idx.search("error handling", None, 10).unwrap();
         assert!(!results.is_empty());
@@ -394,8 +421,10 @@ mod tests {
     #[test]
     fn test_count_and_evict() {
         let idx = SqliteMemoryIndex::open_in_memory().unwrap();
-        idx.upsert(&make_memory("1", "t", "test", "a"), None).unwrap();
-        idx.upsert(&make_memory("2", "t", "test2", "a"), None).unwrap();
+        idx.upsert(&make_memory("1", "t", "test", "a"), None)
+            .unwrap();
+        idx.upsert(&make_memory("2", "t", "test2", "a"), None)
+            .unwrap();
         assert_eq!(idx.count().unwrap(), 2);
     }
 }

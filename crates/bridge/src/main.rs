@@ -1,20 +1,20 @@
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use anyhow::{Result, Context};
 use tokio::signal;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-mod config;
+mod api;
+mod bridge;
 mod cache;
+mod config;
 mod profiles;
 mod relay;
 mod webhook;
-mod api;
-mod bridge;
 
+use api::ApiServer;
+use bridge::Bridge;
 use config::Config;
 use relay::create_keys_from_nsec;
-use bridge::Bridge;
-use api::ApiServer;
 
 #[derive(Parser)]
 #[command(name = "bridge")]
@@ -60,14 +60,16 @@ async fn main() -> Result<()> {
     let mut config = Config::load_from_file(&cli.config)
         .with_context(|| format!("Failed to load config from {}", cli.config))?;
 
-    config.expand_paths()
+    config
+        .expand_paths()
         .with_context(|| "Failed to expand paths in config")?;
 
     // Initialize logging
     init_logging(&config.logging.level)?;
 
     // Validate configuration
-    config.validate()
+    config
+        .validate()
         .with_context(|| "Configuration validation failed")?;
 
     if cli.test {
@@ -92,26 +94,30 @@ async fn run_bridge(config: Config) -> Result<()> {
     tracing::info!("Configuration loaded from bridge.toml");
 
     // Load identity
-    let identity = config.load_identity()
+    let identity = config
+        .load_identity()
         .with_context(|| "Failed to load identity")?;
 
     // Create nostr keys
-    let keys = create_keys_from_nsec(&identity.nsec)
-        .with_context(|| "Failed to create keys from nsec")?;
+    let keys =
+        create_keys_from_nsec(&identity.nsec).with_context(|| "Failed to create keys from nsec")?;
 
     tracing::info!("Loaded identity: {}", keys.public_key());
 
     // Create and start bridge
-    let mut bridge = Bridge::new(config.clone(), keys).await
+    let mut bridge = Bridge::new(config.clone(), keys)
+        .await
         .with_context(|| "Failed to create bridge")?;
 
-    bridge.start().await
+    bridge
+        .start()
+        .await
         .with_context(|| "Failed to start bridge")?;
 
     // Start API server
     let api_server = ApiServer::new(config.api.bind.clone());
     let bridge_state = bridge.state();
-    
+
     tokio::spawn(async move {
         if let Err(e) = api_server.start(bridge_state).await {
             tracing::error!("API server error: {}", e);
@@ -123,7 +129,9 @@ async fn run_bridge(config: Config) -> Result<()> {
 
     // Graceful shutdown
     tracing::info!("Received shutdown signal, stopping bridge...");
-    bridge.shutdown().await
+    bridge
+        .shutdown()
+        .await
         .with_context(|| "Failed to shutdown bridge")?;
 
     Ok(())
@@ -133,23 +141,26 @@ async fn test_config(config: &Config) -> Result<()> {
     println!("Testing configuration...");
 
     // Test configuration validity
-    config.validate()
+    config
+        .validate()
         .with_context(|| "Configuration validation failed")?;
     println!("✓ Configuration is valid");
 
     // Test identity loading
-    let identity = config.load_identity()
+    let identity = config
+        .load_identity()
         .with_context(|| "Failed to load identity")?;
     println!("✓ Identity file is readable");
 
     // Test key parsing
-    let keys = create_keys_from_nsec(&identity.nsec)
-        .with_context(|| "Failed to create keys from nsec")?;
+    let keys =
+        create_keys_from_nsec(&identity.nsec).with_context(|| "Failed to create keys from nsec")?;
     println!("✓ Keys are valid");
     println!("  Public key: {}", keys.public_key());
 
     // Test database connection
-    let _cache = cache::EventCache::new(&config.cache.db_path).await
+    let _cache = cache::EventCache::new(&config.cache.db_path)
+        .await
         .with_context(|| "Failed to connect to database")?;
     println!("✓ Database connection successful");
 
@@ -210,14 +221,14 @@ fn init_logging(level: &str) -> Result<()> {
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(filter.to_string()))
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(filter.to_string())),
         )
         .with(
             tracing_subscriber::fmt::layer()
                 .with_target(false)
                 .with_thread_ids(false)
                 .with_thread_names(false)
-                .compact()
+                .compact(),
         )
         .init();
 

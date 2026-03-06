@@ -20,8 +20,8 @@ pub(crate) fn register_mcp_tools(config: &Config, tools: &mut Vec<Box<dyn Tool>>
 
     // Local MCP servers
     for server_entry in &config.mcp.servers {
-        let result: Option<anyhow::Result<mcp::McpLocalBridge>> =
-            tokio::task::block_in_place(|| {
+        let result: Option<anyhow::Result<mcp::McpLocalBridge>> = tokio::task::block_in_place(
+            || {
                 handle.block_on(async {
                     match server_entry.transport {
                         crate::config::schema::McpTransport::Sse
@@ -54,7 +54,8 @@ pub(crate) fn register_mcp_tools(config: &Config, tools: &mut Vec<Box<dyn Tool>>
                         }
                     }
                 })
-            });
+            },
+        );
 
         if let Some(Ok(bridge)) = result {
             let mcp_tools = bridge.into_tools();

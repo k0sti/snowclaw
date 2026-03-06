@@ -13,5 +13,5 @@ pub mod contextvm;
 pub mod local;
 pub mod types;
 
-pub use local::McpLocalBridge;
 pub use contextvm::McpContextVmBridge;
+pub use local::McpLocalBridge;

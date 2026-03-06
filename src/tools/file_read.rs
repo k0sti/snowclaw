@@ -9,6 +9,10 @@ use std::sync::Arc;
 
 const MAX_FILE_SIZE_BYTES: u64 = 10 * 1024 * 1024;
 
+/// Maximum tool output size in bytes (100KB).
+/// Prevents a single file_read from blowing past the LLM context window budget.
+const MAX_OUTPUT_BYTES: usize = 102_400;
+
 fn sensitive_file_block_message(path: &str) -> String {
     format!(
         "Reading sensitive file '{path}' is blocked by policy. \
@@ -228,9 +232,19 @@ impl Tool for FileReadTool {
                     format!("\n[{total} lines total]")
                 };
 
+                let mut output = format!("{numbered}{summary}");
+                if output.len() > MAX_OUTPUT_BYTES {
+                    output.truncate(MAX_OUTPUT_BYTES);
+                    // Ensure we don't cut mid-char
+                    while !output.is_char_boundary(output.len()) {
+                        output.pop();
+                    }
+                    output.push_str("\n... [output truncated at 100KB, use offset/limit for more]");
+                }
+
                 Ok(ToolResult {
                     success: true,
-                    output: format!("{numbered}{summary}"),
+                    output,
                     error: None,
                 })
             }
@@ -240,7 +254,14 @@ impl Tool for FileReadTool {
                     .await
                     .map_err(|e| anyhow::anyhow!("Failed to read file: {e}"))?;
 
-                if let Some(text) = try_extract_pdf_text(&bytes) {
+                if let Some(mut text) = try_extract_pdf_text(&bytes) {
+                    if text.len() > MAX_OUTPUT_BYTES {
+                        text.truncate(MAX_OUTPUT_BYTES);
+                        while !text.is_char_boundary(text.len()) {
+                            text.pop();
+                        }
+                        text.push_str("\n... [output truncated at 100KB]");
+                    }
                     return Ok(ToolResult {
                         success: true,
                         output: text,
@@ -249,7 +270,14 @@ impl Tool for FileReadTool {
                 }
 
                 // Lossy fallback — replaces invalid bytes with U+FFFD
-                let lossy = String::from_utf8_lossy(&bytes).into_owned();
+                let mut lossy = String::from_utf8_lossy(&bytes).into_owned();
+                if lossy.len() > MAX_OUTPUT_BYTES {
+                    lossy.truncate(MAX_OUTPUT_BYTES);
+                    while !lossy.is_char_boundary(lossy.len()) {
+                        lossy.pop();
+                    }
+                    lossy.push_str("\n... [output truncated at 100KB, use offset/limit for more]");
+                }
                 Ok(ToolResult {
                     success: true,
                     output: lossy,

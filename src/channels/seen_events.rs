@@ -107,8 +107,8 @@ impl SeenEventsStore {
         let (ids, rows) = {
             let conn = self.conn.lock();
 
-            let mut stmt = conn
-                .prepare("SELECT event_id FROM seen_events WHERE processed_at >= ?1")?;
+            let mut stmt =
+                conn.prepare("SELECT event_id FROM seen_events WHERE processed_at >= ?1")?;
             let ids: Vec<String> = stmt
                 .query_map(params![cutoff as i64], |row| row.get(0))?
                 .filter_map(|r| r.ok())
@@ -148,9 +148,7 @@ impl SeenEventsStore {
         let mut dm_history = self.dm_history.write().await;
         for msg in rows {
             let key = msg.sender_hex.clone();
-            let buf = dm_history
-                .entry(key)
-                .or_insert_with(VecDeque::new);
+            let buf = dm_history.entry(key).or_insert_with(VecDeque::new);
             buf.push_back(msg);
             while buf.len() > self.dm_history_size {
                 buf.pop_front();
@@ -260,9 +258,7 @@ impl SeenEventsStore {
 
         // Add to in-memory ring buffer
         let mut history = self.dm_history.write().await;
-        let buf = history
-            .entry(sender_key)
-            .or_insert_with(VecDeque::new);
+        let buf = history.entry(sender_key).or_insert_with(VecDeque::new);
         buf.push_back(msg);
         while buf.len() > self.dm_history_size {
             buf.pop_front();
@@ -285,7 +281,11 @@ impl SeenEventsStore {
             if msg.event_id == exclude_event_id {
                 continue;
             }
-            let direction = if msg.is_outgoing { "you" } else { &msg.sender_name };
+            let direction = if msg.is_outgoing {
+                "you"
+            } else {
+                &msg.sender_name
+            };
             ctx.push_str(&format!("<{}> {}\n", direction, msg.content));
             has_content = true;
         }
@@ -372,14 +372,16 @@ mod tests {
 
         // Push 7 messages (buffer size = 5)
         for i in 0..7 {
-            store.push_dm_history(DmHistoryMessage {
-                sender_hex: "sender1".to_string(),
-                sender_name: "Alice".to_string(),
-                content: format!("msg {i}"),
-                timestamp: 1000 + i,
-                event_id: format!("ev{i}"),
-                is_outgoing: i % 2 == 0,
-            }).await;
+            store
+                .push_dm_history(DmHistoryMessage {
+                    sender_hex: "sender1".to_string(),
+                    sender_name: "Alice".to_string(),
+                    content: format!("msg {i}"),
+                    timestamp: 1000 + i,
+                    event_id: format!("ev{i}"),
+                    is_outgoing: i % 2 == 0,
+                })
+                .await;
         }
 
         let history = store.dm_history.read().await;
@@ -394,30 +396,36 @@ mod tests {
     async fn format_dm_context_excludes_current() {
         let (store, _dir) = test_store();
 
-        store.push_dm_history(DmHistoryMessage {
-            sender_hex: "sender1".to_string(),
-            sender_name: "Alice".to_string(),
-            content: "hello".to_string(),
-            timestamp: 1000,
-            event_id: "ev1".to_string(),
-            is_outgoing: false,
-        }).await;
-        store.push_dm_history(DmHistoryMessage {
-            sender_hex: "sender1".to_string(),
-            sender_name: "Alice".to_string(),
-            content: "hi back".to_string(),
-            timestamp: 1001,
-            event_id: "ev2".to_string(),
-            is_outgoing: true,
-        }).await;
-        store.push_dm_history(DmHistoryMessage {
-            sender_hex: "sender1".to_string(),
-            sender_name: "Alice".to_string(),
-            content: "current msg".to_string(),
-            timestamp: 1002,
-            event_id: "ev3".to_string(),
-            is_outgoing: false,
-        }).await;
+        store
+            .push_dm_history(DmHistoryMessage {
+                sender_hex: "sender1".to_string(),
+                sender_name: "Alice".to_string(),
+                content: "hello".to_string(),
+                timestamp: 1000,
+                event_id: "ev1".to_string(),
+                is_outgoing: false,
+            })
+            .await;
+        store
+            .push_dm_history(DmHistoryMessage {
+                sender_hex: "sender1".to_string(),
+                sender_name: "Alice".to_string(),
+                content: "hi back".to_string(),
+                timestamp: 1001,
+                event_id: "ev2".to_string(),
+                is_outgoing: true,
+            })
+            .await;
+        store
+            .push_dm_history(DmHistoryMessage {
+                sender_hex: "sender1".to_string(),
+                sender_name: "Alice".to_string(),
+                content: "current msg".to_string(),
+                timestamp: 1002,
+                event_id: "ev3".to_string(),
+                is_outgoing: false,
+            })
+            .await;
 
         let ctx = store.format_dm_context("sender1", "ev3").await;
         assert!(ctx.contains("<Alice> hello"));
@@ -440,14 +448,16 @@ mod tests {
         {
             let store = SeenEventsStore::new(dir.path(), Some(10)).unwrap();
             store.mark_seen("persistent_ev", 1059, "sender_hex").await;
-            store.push_dm_history(DmHistoryMessage {
-                sender_hex: "sender1".to_string(),
-                sender_name: "Alice".to_string(),
-                content: "persisted msg".to_string(),
-                timestamp: now_secs(),
-                event_id: "persistent_ev".to_string(),
-                is_outgoing: false,
-            }).await;
+            store
+                .push_dm_history(DmHistoryMessage {
+                    sender_hex: "sender1".to_string(),
+                    sender_name: "Alice".to_string(),
+                    content: "persisted msg".to_string(),
+                    timestamp: now_secs(),
+                    event_id: "persistent_ev".to_string(),
+                    is_outgoing: false,
+                })
+                .await;
         }
 
         // Reopen: cache is empty until load_recent

@@ -301,7 +301,7 @@ impl Agent {
             None
         };
 
-        let mut tools = tools::all_tools_with_runtime(
+        let tools = tools::all_tools_with_runtime(
             Arc::new(config.clone()),
             &security,
             runtime,
@@ -316,7 +316,7 @@ impl Agent {
             config.api_key.as_deref(),
             config,
         );
-        let (tools, tool_filter_report) = tools::filter_primary_agent_tools(
+        let (mut tools, tool_filter_report) = tools::filter_primary_agent_tools(
             tools,
             &config.agent.allowed_tools,
             &config.agent.denied_tools,

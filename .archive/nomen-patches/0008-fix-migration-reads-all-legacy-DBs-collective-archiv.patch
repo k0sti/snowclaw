@@ -1,0 +1,194 @@
+From f49d9744ff1a22c5e9082058aa9ee778e2da8a8a Mon Sep 17 00:00:00 2001
+From: kosti <koshdot@proton.me>
+Date: Sun, 8 Mar 2026 01:53:18 +0200
+Subject: [PATCH 08/13] fix: migration reads all legacy DBs (collective,
+ archived, brain)
+
+- Scan collective/memories.db (399 rows), archived brain DBs
+- Auto-detect schema (collective vs SQLite backend columns)
+- Accumulate from all found DBs instead of returning on first match
+---
+ src/memory/nomen_migrate.rs | 160 ++++++++++++++++++++++++++----------
+ 1 file changed, 116 insertions(+), 44 deletions(-)
+
+diff --git a/src/memory/nomen_migrate.rs b/src/memory/nomen_migrate.rs
+index fcbbf772..4e175a9e 100644
+--- a/src/memory/nomen_migrate.rs
++++ b/src/memory/nomen_migrate.rs
+@@ -34,57 +34,129 @@ pub struct MigrationReport {
+ /// Database path: `{workspace_dir}/memory/brain.db` (standard SQLite backend)
+ /// or `{workspace_dir}/nostr_sqlite/memory/brain.db` (Nostr+SQLite backend).
+ pub fn read_legacy_memories(workspace_dir: &Path) -> Result<Vec<LegacyMemory>> {
+-    // Try both possible paths.
++    // Try known legacy locations — workspace-relative and absolute fallbacks.
++    let home = std::env::var("HOME").unwrap_or_else(|_| "/home/k0".to_string());
++    let snowclaw_dir = std::path::PathBuf::from(&home).join(".snowclaw");
++
+     let candidates = [
+         workspace_dir.join("memory").join("brain.db"),
+         workspace_dir.join("nostr_sqlite").join("memory").join("brain.db"),
++        workspace_dir.join("collective").join("memories.db"),
++        snowclaw_dir.join("archived").join("brain.db"),
++        snowclaw_dir.join("archived").join("brain-nostr.db"),
+     ];
+ 
+-    let db_path = candidates
+-        .iter()
+-        .find(|p| p.exists())
+-        .ok_or_else(|| {
+-            anyhow::anyhow!(
+-                "No legacy SQLite database found. Checked:\n  - {}\n  - {}",
+-                candidates[0].display(),
+-                candidates[1].display()
++    let existing: Vec<_> = candidates.iter().filter(|p| p.exists()).collect();
++    if existing.is_empty() {
++        let paths: Vec<_> = candidates.iter().map(|p| format!("  - {}", p.display())).collect();
++        anyhow::bail!("No legacy SQLite database found. Checked:\n{}", paths.join("\n"));
++    }
++
++    // Prefer the first DB that actually contains rows in `memories`.
++    let mut all_memories = Vec::new();
++
++    for db_path in existing {
++        let conn = Connection::open_with_flags(
++            db_path,
++            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
++        )
++        .with_context(|| format!("Failed to open legacy database: {}", db_path.display()))?;
++
++        // Skip DBs that don't have a memories table.
++        let has_memories_table: bool = conn
++            .query_row(
++                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='memories')",
++                [],
++                |row| row.get(0),
+             )
+-        })?;
+-
+-    let conn = Connection::open_with_flags(
+-        db_path,
+-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+-    )
+-    .with_context(|| format!("Failed to open legacy database: {}", db_path.display()))?;
+-
+-    // Check if the session_id column exists (added in a migration).
+-    let has_session_id = conn
+-        .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='memories'")
+-        .and_then(|mut s| s.query_row([], |row| row.get::<_, String>(0)))
+-        .map(|sql| sql.contains("session_id"))
+-        .unwrap_or(false);
+-
+-    let query = if has_session_id {
+-        "SELECT key, content, category, created_at, session_id FROM memories ORDER BY created_at ASC"
+-    } else {
+-        "SELECT key, content, category, created_at, NULL as session_id FROM memories ORDER BY created_at ASC"
+-    };
++            .unwrap_or(false);
++        if !has_memories_table {
++            continue;
++        }
++
++        let count: i64 = conn
++            .query_row("SELECT COUNT(*) FROM memories", [], |row| row.get(0))
++            .unwrap_or(0);
++
++        if count == 0 {
++            continue;
++        }
++
++        // Detect schema: collective DB has `topic` column, SQLite backend has `key`.
++        let table_sql: String = conn
++            .query_row(
++                "SELECT sql FROM sqlite_master WHERE type='table' AND name='memories'",
++                [],
++                |row| row.get(0),
++            )
++            .unwrap_or_default();
++
++        let is_collective = table_sql.contains("topic") && table_sql.contains("summary");
++
++        if is_collective {
++            // Collective schema: id, tier, topic, summary, detail, ...
++            let query = "SELECT topic, summary, detail, tier, created_at FROM memories ORDER BY created_at ASC";
++            let mut stmt = conn.prepare(query)?;
++            let rows = stmt
++                .query_map([], |row| {
++                    let topic: String = row.get(0)?;
++                    let summary: String = row.get(1)?;
++                    let detail: String = row.get(2)?;
++                    let tier: String = row.get(3)?;
++                    let created_at: i64 = row.get(4)?;
++                    // Map collective tier to category for uniform handling
++                    let category = if tier.starts_with("private") {
++                        "core".to_string()
++                    } else {
++                        tier
++                    };
++                    let content = if detail.is_empty() {
++                        summary
++                    } else {
++                        format!("{}\n\n{}", summary, detail)
++                    };
++                    Ok(LegacyMemory {
++                        key: topic,
++                        content,
++                        category,
++                        created_at: created_at.to_string(),
++                        session_id: None,
++                    })
++                })?
++                .collect::<Result<Vec<_>, _>>()
++                .with_context(|| format!("Failed to read collective memories from {}", db_path.display()))?;
++
++            tracing::info!("Read {} memories from collective DB: {}", rows.len(), db_path.display());
++            all_memories.extend(rows);
++        } else {
++            // Standard SQLite backend schema: key, content, category, ...
++            let has_session_id = table_sql.contains("session_id");
++            let query = if has_session_id {
++                "SELECT key, content, category, created_at, session_id FROM memories ORDER BY created_at ASC"
++            } else {
++                "SELECT key, content, category, created_at, NULL as session_id FROM memories ORDER BY created_at ASC"
++            };
++
++            let mut stmt = conn.prepare(query)?;
++            let rows = stmt
++                .query_map([], |row| {
++                    Ok(LegacyMemory {
++                        key: row.get(0)?,
++                        content: row.get(1)?,
++                        category: row.get(2)?,
++                        created_at: row.get(3)?,
++                        session_id: row.get(4)?,
++                    })
++                })?
++                .collect::<Result<Vec<_>, _>>()
++                .with_context(|| format!("Failed to read memories from {}", db_path.display()))?;
++
++            tracing::info!("Read {} memories from SQLite DB: {}", rows.len(), db_path.display());
++            all_memories.extend(rows);
++        }
++    }
+ 
+-    let mut stmt = conn.prepare(query)?;
+-    let rows = stmt
+-        .query_map([], |row| {
+-            Ok(LegacyMemory {
+-                key: row.get(0)?,
+-                content: row.get(1)?,
+-                category: row.get(2)?,
+-                created_at: row.get(3)?,
+-                session_id: row.get(4)?,
+-            })
+-        })?
+-        .collect::<Result<Vec<_>, _>>()
+-        .context("Failed to read legacy memories")?;
+-
+-    Ok(rows)
++    Ok(all_memories)
+ }
+ 
+ /// Map a legacy category string to a Nomen tier.
+-- 
+2.52.0
+

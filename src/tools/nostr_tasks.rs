@@ -133,10 +133,7 @@ impl Tool for NostrTaskTool {
     }
 
     async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
-        let action = args
-            .get("action")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let action = args.get("action").and_then(|v| v.as_str()).unwrap_or("");
 
         match action {
             "create" => {
@@ -203,10 +200,7 @@ impl Tool for NostrTaskTool {
                     }
                 };
 
-                let detail = args
-                    .get("detail")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
+                let detail = args.get("detail").and_then(|v| v.as_str()).unwrap_or("");
 
                 let status_kind = match new_status {
                     "queued" => 1630,
@@ -229,9 +223,9 @@ impl Tool for NostrTaskTool {
                 let mut tasks = self.load_tasks()?;
                 let now = chrono::Utc::now().to_rfc3339();
 
-                let task = tasks.iter_mut().find(|t| {
-                    t.get("id").and_then(|v| v.as_str()) == Some(&task_id)
-                });
+                let task = tasks
+                    .iter_mut()
+                    .find(|t| t.get("id").and_then(|v| v.as_str()) == Some(&task_id));
 
                 match task {
                     Some(task) => {
@@ -263,9 +257,7 @@ impl Tool for NostrTaskTool {
             }
 
             "list" => {
-                let filter_status = args
-                    .get("filter_status")
-                    .and_then(|v| v.as_str());
+                let filter_status = args.get("filter_status").and_then(|v| v.as_str());
 
                 let tasks = self.load_tasks()?;
                 let filtered: Vec<&serde_json::Value> = if let Some(status) = filter_status {
@@ -290,8 +282,13 @@ impl Tool for NostrTaskTool {
                     let id = task.get("id").and_then(|v| v.as_str()).unwrap_or("?");
                     let title = task.get("title").and_then(|v| v.as_str()).unwrap_or("?");
                     let status = task.get("status").and_then(|v| v.as_str()).unwrap_or("?");
-                    let updated = task.get("updated_at").and_then(|v| v.as_str()).unwrap_or("?");
-                    output.push_str(&format!("  [{status}] {id}: {title} (updated: {updated})\n"));
+                    let updated = task
+                        .get("updated_at")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("?");
+                    output.push_str(&format!(
+                        "  [{status}] {id}: {title} (updated: {updated})\n"
+                    ));
                 }
 
                 Ok(ToolResult {
@@ -304,7 +301,9 @@ impl Tool for NostrTaskTool {
             _ => Ok(ToolResult {
                 success: false,
                 output: String::new(),
-                error: Some(format!("Unknown action: {action}. Use create, update, or list.")),
+                error: Some(format!(
+                    "Unknown action: {action}. Use create, update, or list."
+                )),
             }),
         }
     }

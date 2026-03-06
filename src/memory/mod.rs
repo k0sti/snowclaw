@@ -2,6 +2,7 @@ pub mod backend;
 pub mod chunker;
 pub mod cli;
 pub mod collective;
+pub mod contextvm_bridge;
 pub mod cortex;
 pub mod decay;
 pub mod doc_index;
@@ -12,6 +13,8 @@ pub mod hygiene;
 pub mod lucid;
 pub mod markdown;
 pub mod message_index;
+pub mod nomen_policy;
+pub mod nomen_socket_adapter;
 pub mod none;
 pub mod nostr;
 pub mod nostr_sqlite;
@@ -20,6 +23,7 @@ pub mod postgres;
 pub mod qdrant;
 pub mod response_cache;
 pub mod retrieval;
+pub mod runtime_context;
 pub mod snapshot;
 pub mod snowclaw_backends;
 pub mod snowclaw_ext;
@@ -31,8 +35,8 @@ pub mod vector;
 
 #[allow(unused_imports)]
 pub use backend::{
-    classify_memory_backend, default_memory_backend_key,
-    selectable_memory_backends, MemoryBackendKind, MemoryBackendProfile,
+    classify_memory_backend, default_memory_backend_key, selectable_memory_backends,
+    MemoryBackendKind, MemoryBackendProfile,
 };
 
 /// Backend profile lookup that checks snowclaw-specific backends first,
@@ -44,21 +48,23 @@ pub fn memory_backend_profile(backend: &str) -> MemoryBackendProfile {
     backend::memory_backend_profile(backend)
 }
 
+pub use collective::CollectiveMemory;
 pub use cortex::CortexMemMemory;
 pub use hybrid::SqliteQdrantHybridMemory;
 pub use lucid::LucidMemory;
 pub use markdown::MarkdownMemory;
+pub use nomen_socket_adapter::NomenSocketMemory;
 pub use none::NoneMemory;
-pub use collective::CollectiveMemory;
 pub use nostr_sqlite::NostrSqliteMemory;
 #[cfg(feature = "memory-postgres")]
 pub use postgres::PostgresMemory;
 pub use qdrant::QdrantMemory;
 pub use response_cache::ResponseCache;
-pub use sqlite::SqliteMemory;
-pub use traits::Memory;
+pub use runtime_context::{MemoryRuntimeContext, MemoryVisibility};
 #[allow(unused_imports)]
 pub use snowclaw_ext::{RecallContext, SnowclawMemoryExt};
+pub use sqlite::SqliteMemory;
+pub use traits::Memory;
 pub use traits::{MemoryCategory, MemoryEntry};
 
 use crate::config::{EmbeddingRouteConfig, MemoryConfig, StorageProviderConfig};
@@ -90,7 +96,7 @@ where
             Ok(Box::new(CortexMemMemory::new(workspace_dir, local)))
         }
         MemoryBackendKind::Postgres => postgres_builder(),
-        MemoryBackendKind::Qdrant | MemoryBackendKind::Markdown => {
+        MemoryBackendKind::Qdrant | MemoryBackendKind::Markdown | MemoryBackendKind::Nomen => {
             Ok(Box::new(MarkdownMemory::new(workspace_dir)))
         }
         MemoryBackendKind::None => Ok(Box::new(NoneMemory::new())),
@@ -401,8 +407,14 @@ pub fn create_memory_with_storage_and_routes(
 
     // --- snowclaw backends ---
     // Nostr backend: composite Nostr+SQLite for relay persistence + local semantic search.
-    if matches!(snowclaw_backends::classify(&backend_name), snowclaw_backends::SnowclawBackendKind::Nostr) {
-        let nsec = config.nsec.clone().or_else(|| std::env::var("SNOWCLAW_NSEC").ok());
+    if matches!(
+        snowclaw_backends::classify(&backend_name),
+        snowclaw_backends::SnowclawBackendKind::Nostr
+    ) {
+        let nsec = config
+            .nsec
+            .clone()
+            .or_else(|| std::env::var("SNOWCLAW_NSEC").ok());
 
         let embedder: Arc<dyn embeddings::EmbeddingProvider> =
             Arc::from(embeddings::create_embedding_provider(
@@ -428,14 +440,27 @@ pub fn create_memory_with_storage_and_routes(
         return Ok(Box::new(mem));
     }
 
+    // NomenSocket backend: out-of-process Nomen daemon via Unix domain socket.
+    if matches!(
+        snowclaw_backends::classify(&backend_name),
+        snowclaw_backends::SnowclawBackendKind::NomenSocket
+    ) {
+        let socket_path = config.nomen_socket_path.as_deref().map(std::path::Path::new);
+        let mem = NomenSocketMemory::new(socket_path);
+        return Ok(Box::new(mem));
+    }
+
     // Collective memory: snow-memory FTS5 index with trust-ranked search.
-    if matches!(snowclaw_backends::classify(&backend_name), snowclaw_backends::SnowclawBackendKind::Collective) {
-        let nsec = config.nsec.clone().or_else(|| std::env::var("SNOWCLAW_NSEC").ok());
-        let mem = CollectiveMemory::new_with_relay(
-            workspace_dir,
-            &config.collective,
-            nsec.as_deref(),
-        )?;
+    if matches!(
+        snowclaw_backends::classify(&backend_name),
+        snowclaw_backends::SnowclawBackendKind::Collective
+    ) {
+        let nsec = config
+            .nsec
+            .clone()
+            .or_else(|| std::env::var("SNOWCLAW_NSEC").ok());
+        let mem =
+            CollectiveMemory::new_with_relay(workspace_dir, &config.collective, nsec.as_deref())?;
         return Ok(Box::new(mem));
     }
 
@@ -585,6 +610,17 @@ mod tests {
         };
         let mem = create_memory(&cfg, tmp.path(), None).unwrap();
         assert_eq!(mem.name(), "none");
+    }
+
+    #[test]
+    fn factory_nomen_socket() {
+        let tmp = TempDir::new().unwrap();
+        let cfg = MemoryConfig {
+            backend: "nomen-socket".into(),
+            ..MemoryConfig::default()
+        };
+        let mem = create_memory(&cfg, tmp.path(), None).unwrap();
+        assert_eq!(mem.name(), "nomen-socket");
     }
 
     #[test]

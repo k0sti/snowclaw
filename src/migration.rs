@@ -118,7 +118,14 @@ pub(crate) async fn migrate_openclaw(
     }
 
     let source_workspace = resolve_openclaw_workspace(options.source_workspace.clone())?;
-    let source_config = resolve_openclaw_config(options.source_config.clone())?;
+    let source_config = match (&options.source_workspace, &options.source_config) {
+        (_, Some(explicit)) => resolve_openclaw_config(Some(explicit.clone()))?,
+        (Some(workspace), None) => workspace
+            .parent()
+            .map(|parent| parent.join("openclaw.json"))
+            .unwrap_or_else(|| PathBuf::from("openclaw.json")),
+        (None, None) => resolve_openclaw_config(None)?,
+    };
 
     let mut report = OpenClawMigrationReport {
         source_workspace: source_workspace.clone(),

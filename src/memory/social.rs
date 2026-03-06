@@ -196,9 +196,7 @@ pub fn add_npub_note(
     };
 
     // Read current notes
-    let sql = format!(
-        "SELECT {column} FROM social_npubs WHERE hex_pubkey = ?1"
-    );
+    let sql = format!("SELECT {column} FROM social_npubs WHERE hex_pubkey = ?1");
     let current: Option<String> = conn
         .query_row(&sql, params![hex_pubkey], |row| row.get(0))
         .ok()
@@ -212,9 +210,7 @@ pub fn add_npub_note(
     notes.push(note.to_string());
     let updated = serde_json::to_string(&notes)?;
 
-    let update_sql = format!(
-        "UPDATE social_npubs SET {column} = ?1 WHERE hex_pubkey = ?2"
-    );
+    let update_sql = format!("UPDATE social_npubs SET {column} = ?1 WHERE hex_pubkey = ?2");
     conn.execute(&update_sql, params![updated, hex_pubkey])?;
 
     debug!(hex = %hex_pubkey, is_owner, "added social note");
@@ -261,11 +257,7 @@ pub fn set_group_purpose(conn: &Connection, group_id: &str, purpose: &str) -> Re
 }
 
 /// Record a member in a group's members JSON array (deduplicates).
-pub fn record_group_member(
-    conn: &Connection,
-    group_id: &str,
-    hex_pubkey: &str,
-) -> Result<()> {
+pub fn record_group_member(conn: &Connection, group_id: &str, hex_pubkey: &str) -> Result<()> {
     let current: Option<String> = conn
         .query_row(
             "SELECT members_json FROM social_groups WHERE group_id = ?1",
@@ -431,11 +423,7 @@ pub fn get_group(conn: &Connection, group_id: &str) -> Result<Option<SocialGroup
 ///
 /// Returns a formatted string suitable for prompt injection with group and
 /// sender context from social memory.
-pub fn build_social_context(
-    conn: &Connection,
-    sender_hex: &str,
-    group_id: &str,
-) -> String {
+pub fn build_social_context(conn: &Connection, sender_hex: &str, group_id: &str) -> String {
     let mut ctx = String::new();
 
     // Group context
@@ -446,12 +434,7 @@ pub fn build_social_context(
         if let Some(ref notes_json) = group.notes_json {
             if let Ok(notes) = serde_json::from_str::<Vec<String>>(notes_json) {
                 if !notes.is_empty() {
-                    let _ = writeln!(
-                        ctx,
-                        "[Group #{} notes: {}]",
-                        group_id,
-                        notes.join("; ")
-                    );
+                    let _ = writeln!(ctx, "[Group #{} notes: {}]", group_id, notes.join("; "));
                 }
             }
         }
@@ -473,7 +456,8 @@ pub fn build_social_context(
             if let Ok(notes) = serde_json::from_str::<Vec<String>>(notes_json) {
                 if !notes.is_empty() {
                     // Show last 3 notes max to keep context concise
-                    let recent: Vec<&str> = notes.iter().rev().take(3).map(|s| s.as_str()).collect();
+                    let recent: Vec<&str> =
+                        notes.iter().rev().take(3).map(|s| s.as_str()).collect();
                     let ordered: Vec<&str> = recent.into_iter().rev().collect();
                     parts.push(format!("notes: {}", ordered.join("; ")));
                 }
@@ -494,11 +478,7 @@ pub fn build_social_context(
 }
 
 /// Search social data using FTS5.
-pub fn search_social(
-    conn: &Connection,
-    query: &str,
-    limit: usize,
-) -> Result<Vec<SocialNpub>> {
+pub fn search_social(conn: &Connection, query: &str, limit: usize) -> Result<Vec<SocialNpub>> {
     if query.trim().is_empty() {
         return Ok(Vec::new());
     }
@@ -687,7 +667,8 @@ mod tests {
 
         let fetched = get_npub(&conn, "aabb").unwrap().unwrap();
         assert!(fetched.notes_json.is_some());
-        let notes: Vec<String> = serde_json::from_str(fetched.notes_json.as_ref().unwrap()).unwrap();
+        let notes: Vec<String> =
+            serde_json::from_str(fetched.notes_json.as_ref().unwrap()).unwrap();
         assert_eq!(notes, vec!["existing note"]);
     }
 
@@ -881,7 +862,11 @@ mod tests {
     fn search_respects_limit() {
         let conn = test_conn();
         for i in 0..20 {
-            upsert_npub(&conn, &sample_npub(&format!("hex_{i:02}"), &format!("User_{i}"))).unwrap();
+            upsert_npub(
+                &conn,
+                &sample_npub(&format!("hex_{i:02}"), &format!("User_{i}")),
+            )
+            .unwrap();
         }
         let results = search_social(&conn, "User", 5).unwrap();
         assert!(results.len() <= 5);

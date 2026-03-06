@@ -1,0 +1,70 @@
+From f04673f7eddddfceca5d40ad64fe3edfd836317d Mon Sep 17 00:00:00 2001
+From: kosti <koshdot@proton.me>
+Date: Sun, 8 Mar 2026 12:33:14 +0200
+Subject: [PATCH 12/13] fix: honor HOME override and tighten skill link audit
+
+---
+ src/config/schema.rs |  4 ++++
+ src/skills/audit.rs  | 17 ++++++++++++++++-
+ 2 files changed, 20 insertions(+), 1 deletion(-)
+
+diff --git a/src/config/schema.rs b/src/config/schema.rs
+index c1eff9a7..6445eb4b 100644
+--- a/src/config/schema.rs
++++ b/src/config/schema.rs
+@@ -6619,6 +6619,10 @@ struct ActiveWorkspaceState {
+ }
+ 
+ fn default_config_dir() -> Result<PathBuf> {
++    if let Some(home) = std::env::var_os("HOME").filter(|value| !value.is_empty()) {
++        return Ok(PathBuf::from(home).join(APP_DIR_NAME));
++    }
++
+     let home = UserDirs::new()
+         .map(|u| u.home_dir().to_path_buf())
+         .context("Could not find home directory")?;
+diff --git a/src/skills/audit.rs b/src/skills/audit.rs
+index ab8e0545..ef88f674 100644
+--- a/src/skills/audit.rs
++++ b/src/skills/audit.rs
+@@ -529,6 +529,9 @@ fn is_allowed_cross_skill_target(skill_root: &Path, canonical_target: &Path) ->
+     let Some(collection_root) = skill_root.parent() else {
+         return false;
+     };
++    if !has_collection_depth(collection_root, canonical_target) {
++        return false;
++    }
+ 
+     canonical_target.starts_with(collection_root)
+         && canonical_target.is_file()
+@@ -550,7 +553,9 @@ fn is_allowed_missing_cross_skill_target(skill_root: &Path, source: &Path, targe
+         return false;
+     };
+ 
+-    lexical.starts_with(collection_root) && is_markdown_file(&lexical)
++    lexical.starts_with(collection_root)
++        && is_markdown_file(&lexical)
++        && has_collection_depth(collection_root, &lexical)
+ }
+ 
+ /// Normalizes `.` and `..` segments without requiring filesystem existence.
+@@ -574,6 +579,16 @@ fn normalize_lexical_path(path: &Path) -> Option<PathBuf> {
+     Some(normalized)
+ }
+ 
++fn has_collection_depth(collection_root: &Path, target: &Path) -> bool {
++    let Ok(rel) = target.strip_prefix(collection_root) else {
++        return false;
++    };
++    let mut components = rel.components().filter(|component| {
++        matches!(component, Component::Normal(_))
++    });
++    components.next().is_some() && components.next().is_some()
++}
++
+ fn relative_display(root: &Path, path: &Path) -> String {
+     if let Ok(rel) = path.strip_prefix(root) {
+         if rel.as_os_str().is_empty() {
+-- 
+2.52.0
+

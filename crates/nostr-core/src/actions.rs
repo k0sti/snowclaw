@@ -99,7 +99,10 @@ mod tests {
     fn extract_action_from_tag() {
         let keys = Keys::generate();
         let event = EventBuilder::new(Kind::Custom(1121), "")
-            .tag(Tag::custom(TagKind::custom("action"), vec!["control.stop".to_string()]))
+            .tag(Tag::custom(
+                TagKind::custom("action"),
+                vec!["control.stop".to_string()],
+            ))
             .sign_with_keys(&keys)
             .unwrap();
 
@@ -123,8 +126,14 @@ mod tests {
     fn extract_action_params_from_tags() {
         let keys = Keys::generate();
         let event = EventBuilder::new(Kind::Custom(1121), "")
-            .tag(Tag::custom(TagKind::custom("param:scope"), vec!["global".to_string()]))
-            .tag(Tag::custom(TagKind::custom("param:mode"), vec!["all".to_string()]))
+            .tag(Tag::custom(
+                TagKind::custom("param:scope"),
+                vec!["global".to_string()],
+            ))
+            .tag(Tag::custom(
+                TagKind::custom("param:mode"),
+                vec!["all".to_string()],
+            ))
             .sign_with_keys(&keys)
             .unwrap();
 
@@ -138,9 +147,12 @@ mod tests {
     fn targets_pubkey_check() {
         let keys1 = Keys::generate();
         let keys2 = Keys::generate();
-        
+
         let event = EventBuilder::new(Kind::Custom(1121), "test action")
-            .tag(Tag::custom(TagKind::custom("p"), vec![keys1.public_key().to_hex()]))
+            .tag(Tag::custom(
+                TagKind::custom("p"),
+                vec![keys1.public_key().to_hex()],
+            ))
             .sign_with_keys(&keys2)
             .unwrap();
 

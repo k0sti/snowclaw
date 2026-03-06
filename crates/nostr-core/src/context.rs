@@ -20,7 +20,9 @@ pub fn push_history(
     msg: HistoryMessage,
     context_history: usize,
 ) {
-    let history = group_history.entry(group.to_string()).or_insert_with(VecDeque::new);
+    let history = group_history
+        .entry(group.to_string())
+        .or_insert_with(VecDeque::new);
     history.push_back(msg);
     // Keep only the most recent N messages
     while history.len() > context_history {
@@ -42,7 +44,7 @@ pub fn format_history_context(
     let mut lines = Vec::new();
     let max_messages = context_history.min(history.len());
     let start_idx = history.len().saturating_sub(max_messages);
-    
+
     for msg in history.iter().skip(start_idx) {
         if msg.event_id == exclude_event_id {
             continue;
@@ -56,13 +58,13 @@ pub fn format_history_context(
             &msg.event_id,
             msg.is_owner,
         );
-        
+
         let content = if msg.content.len() > 280 {
             format!("{}…", &msg.content[..280])
         } else {
             msg.content.clone()
         };
-        
+
         lines.push(format!("{}\n{}", header, content));
     }
 
@@ -85,12 +87,24 @@ pub fn compact_group_header(
     let owner_badge = if is_owner { " 👑" } else { "" };
     let short_npub = truncate_npub(npub);
     let short_id = &event_id[..8.min(event_id.len())];
-    
+
     match kind {
-        9 => format!("💬 #{} {} ({}){}  [{}]", group, sender, short_npub, owner_badge, short_id),
-        11 => format!("👋 {} joined #{} ({}){}  [{}]", sender, group, short_npub, owner_badge, short_id),
-        12 => format!("👋 {} left #{} ({}){}  [{}]", sender, group, short_npub, owner_badge, short_id),
-        _ => format!("📝 #{} {} ({}){}  [kind {} | {}]", group, sender, short_npub, owner_badge, kind, short_id),
+        9 => format!(
+            "💬 #{} {} ({}){}  [{}]",
+            group, sender, short_npub, owner_badge, short_id
+        ),
+        11 => format!(
+            "👋 {} joined #{} ({}){}  [{}]",
+            sender, group, short_npub, owner_badge, short_id
+        ),
+        12 => format!(
+            "👋 {} left #{} ({}){}  [{}]",
+            sender, group, short_npub, owner_badge, short_id
+        ),
+        _ => format!(
+            "📝 #{} {} ({}){}  [kind {} | {}]",
+            group, sender, short_npub, owner_badge, kind, short_id
+        ),
     }
 }
 
@@ -101,7 +115,10 @@ pub fn compact_task_content(event_id: &str, task_ref: &str, status: &str, detail
     if detail.is_empty() {
         format!("🔧 Task {}: {} [{}]", short_task, status, short_id)
     } else {
-        format!("🔧 Task {}: {} - {} [{}]", short_task, status, detail, short_id)
+        format!(
+            "🔧 Task {}: {} - {} [{}]",
+            short_task, status, detail, short_id
+        )
     }
 }
 
@@ -138,7 +155,8 @@ mod tests {
 
     #[test]
     fn compact_task_content_with_detail() {
-        let content = compact_task_content("event12345678", "task87654321", "Done", "Fixed the bug");
+        let content =
+            compact_task_content("event12345678", "task87654321", "Done", "Fixed the bug");
         assert_eq!(content, "🔧 Task task8765: Done - Fixed the bug [event123]");
     }
 
@@ -152,7 +170,7 @@ mod tests {
     fn format_history_excludes_event() {
         let mut history = HashMap::new();
         let mut group_history = VecDeque::new();
-        
+
         group_history.push_back(HistoryMessage {
             sender: "Alice".to_string(),
             npub: "npub1abc".to_string(),
@@ -161,7 +179,7 @@ mod tests {
             event_id: "event1".to_string(),
             is_owner: false,
         });
-        
+
         group_history.push_back(HistoryMessage {
             sender: "Bob".to_string(),
             npub: "npub1def".to_string(),
@@ -170,9 +188,9 @@ mod tests {
             event_id: "event2".to_string(),
             is_owner: false,
         });
-        
+
         history.insert("test".to_string(), group_history);
-        
+
         let formatted = format_history_context(&history, "test", "event2", 10);
         assert!(formatted.contains("Alice"));
         assert!(!formatted.contains("Hi there")); // excluded

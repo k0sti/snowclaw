@@ -15,19 +15,15 @@ pub mod ring_buffer;
 pub mod tasks;
 
 // Re-export commonly used types
-pub use actions::{
-    extract_action, extract_action_group, extract_action_params, targets_pubkey,
-};
+pub use actions::{extract_action, extract_action_group, extract_action_params, targets_pubkey};
 pub use context::{
     compact_group_header, compact_task_content, format_history_context, push_history,
     truncate_npub, HistoryMessage,
 };
 pub use key_filter::{log_flags, KeyFilter, KeyFilterMetrics, SecurityFlag, SecurityFlagKind};
-pub use memory::{
-    GroupMemory, NostrMemory, NostrMemoryStore, NpubMemory, ProfileMetadata,
-};
+pub use memory::{GroupMemory, NostrMemory, NostrMemoryStore, NpubMemory, ProfileMetadata};
 pub use mention::{
-    detect_mentions, extract_mentioned_pubkeys, is_mentioned, mentions_pubkey, 
+    detect_mentions, extract_mentioned_pubkeys, is_mentioned, mentions_pubkey,
     sanitize_content_preview, Mention, MentionType,
 };
 pub use relay::RelayClient;

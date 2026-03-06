@@ -1,0 +1,30 @@
+From 33e5f9cf3d452d1a5bd6ab2d695f034a6e882db9 Mon Sep 17 00:00:00 2001
+From: kosti <koshdot@proton.me>
+Date: Fri, 6 Mar 2026 12:43:15 +0200
+Subject: [PATCH 01/13] feat: treat @all as a mention trigger
+
+When someone posts '@all' in a group, Snowclaw now picks it up
+as a mention, same as a direct @snowclaw or p-tag mention.
+---
+ src/channels/nostr.rs | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/src/channels/nostr.rs b/src/channels/nostr.rs
+index ae85b930..5f2b691f 100644
+--- a/src/channels/nostr.rs
++++ b/src/channels/nostr.rs
+@@ -896,6 +896,11 @@ impl NostrChannel {
+             }
+         }
+ 
++        // Check for @all broadcast mention
++        if content_lower.contains("@all") {
++            return true;
++        }
++
+         // Check for npub/hex mention in content
+         let our_npub = our_pubkey.to_bech32().unwrap_or_default();
+         let our_hex = our_pubkey.to_hex();
+-- 
+2.52.0
+

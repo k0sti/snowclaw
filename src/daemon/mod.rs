@@ -153,9 +153,26 @@ pub async fn run(config: Config, host: String, port: u16) -> Result<()> {
         tracing::info!("Cron disabled; scheduler supervisor not started");
     }
 
+    // Context-VM: Nostr-native request/response interface via Nomen.
+    if config.contextvm.as_ref().is_some_and(|c| c.enabled) {
+        let cvm_cfg = config.clone();
+        handles.push(spawn_component_supervisor(
+            "contextvm",
+            initial_backoff,
+            max_backoff,
+            move || {
+                let cfg = cvm_cfg.clone();
+                async move { crate::memory::contextvm_bridge::run(&cfg).await }
+            },
+        ));
+    } else {
+        crate::health::mark_component_ok("contextvm");
+        tracing::info!("Context-VM disabled; supervisor not started");
+    }
+
     println!("🧠 ZeroClaw daemon started");
     println!("   Gateway:  http://{host}:{port}");
-    println!("   Components: gateway, channels, heartbeat, scheduler");
+    println!("   Components: gateway, channels, heartbeat, scheduler, contextvm");
     println!("   {}", shutdown_hint());
 
     let signal = wait_for_shutdown_signal().await?;

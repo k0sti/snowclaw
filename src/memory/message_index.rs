@@ -165,11 +165,7 @@ pub fn index_message(conn: &Connection, msg: &IndexableMessage) -> Result<()> {
 }
 
 /// Search messages using FTS5.
-pub fn search_messages(
-    conn: &Connection,
-    query: &str,
-    limit: usize,
-) -> Result<Vec<MessageHit>> {
+pub fn search_messages(conn: &Connection, query: &str, limit: usize) -> Result<Vec<MessageHit>> {
     if query.trim().is_empty() {
         return Ok(Vec::new());
     }
@@ -223,8 +219,7 @@ pub fn search_messages(
 
 /// Count indexed messages.
 pub fn count_messages(conn: &Connection) -> Result<usize> {
-    let count: i64 =
-        conn.query_row("SELECT COUNT(*) FROM message_index", [], |row| row.get(0))?;
+    let count: i64 = conn.query_row("SELECT COUNT(*) FROM message_index", [], |row| row.get(0))?;
     #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
     Ok(count as usize)
 }
@@ -325,7 +320,12 @@ mod tests {
     #[test]
     fn index_substantial_content() {
         assert_eq!(
-            should_index_message("This is a substantial message with enough content", 1, false, false),
+            should_index_message(
+                "This is a substantial message with enough content",
+                1,
+                false,
+                false
+            ),
             IndexDecision::Index
         );
     }

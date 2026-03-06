@@ -6,10 +6,9 @@ use crate::security::{AutonomyLevel, DomainMatcher};
 use anyhow::{Context, Result};
 use directories::UserDirs;
 
-pub use crate::config::snowclaw_schema::APP_DIR_NAME;
-pub use crate::config::snowclaw_schema::ContextVmEntry;
 pub use crate::config::snowclaw_schema::CollectiveMemoryConfig;
-
+pub use crate::config::snowclaw_schema::ContextVmEntry;
+pub use crate::config::snowclaw_schema::APP_DIR_NAME;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -3128,6 +3127,12 @@ pub struct MemoryConfig {
     #[serde(default = "crate::config::snowclaw_schema::default_index_interval_minutes")]
     pub index_interval_minutes: u64,
 
+    // ── Nomen socket backend ────────────────────────────────
+    /// Unix socket path for the Nomen daemon.
+    /// Defaults to `$XDG_RUNTIME_DIR/nomen/nomen.sock`.
+    #[serde(default)]
+    pub nomen_socket_path: Option<String>,
+
     // ── Collective memory (snow-memory) ──────────────────────
     /// Collective memory backend configuration.
     #[serde(default)]
@@ -3212,7 +3217,9 @@ impl Default for MemoryConfig {
             nsec: None,
             embedding_api_key: None,
             indexed_paths: Vec::new(),
-            index_interval_minutes: crate::config::snowclaw_schema::default_index_interval_minutes(),
+            index_interval_minutes: crate::config::snowclaw_schema::default_index_interval_minutes(
+            ),
+            nomen_socket_path: None,
             collective: crate::config::snowclaw_schema::CollectiveMemoryConfig::default(),
         }
     }
@@ -6538,7 +6545,7 @@ impl ChannelConfig for QQConfig {
     }
 }
 
-pub use crate::config::snowclaw_schema::{NostrConfig, default_nostr_relays};
+pub use crate::config::snowclaw_schema::{default_nostr_relays, NostrConfig};
 
 // ── Config impl ──────────────────────────────────────────────────
 
@@ -6619,6 +6626,10 @@ struct ActiveWorkspaceState {
 }
 
 fn default_config_dir() -> Result<PathBuf> {
+    if let Some(home) = std::env::var_os("HOME").filter(|value| !value.is_empty()) {
+        return Ok(PathBuf::from(home).join(APP_DIR_NAME));
+    }
+
     let home = UserDirs::new()
         .map(|u| u.home_dir().to_path_buf())
         .context("Could not find home directory")?;
@@ -7238,11 +7249,7 @@ fn decrypt_channel_secrets(
     }
     if let Some(ref mut nostr) = channels.nostr {
         if let Some(ref mut nsec) = nostr.nsec {
-            decrypt_secret(
-                store,
-                nsec,
-                "config.channels_config.nostr.nsec",
-            )?;
+            decrypt_secret(store, nsec, "config.channels_config.nostr.nsec")?;
         }
     }
     if let Some(ref mut clawdtalk) = channels.clawdtalk {
@@ -7445,11 +7452,7 @@ fn encrypt_channel_secrets(
     }
     if let Some(ref mut nostr) = channels.nostr {
         if let Some(ref mut nsec) = nostr.nsec {
-            encrypt_secret(
-                store,
-                nsec,
-                "config.channels_config.nostr.nsec",
-            )?;
+            encrypt_secret(store, nsec, "config.channels_config.nostr.nsec")?;
         }
     }
     if let Some(ref mut clawdtalk) = channels.clawdtalk {
@@ -13638,7 +13641,7 @@ default_model = "legacy-model"
         let _env_guard = env_override_lock().await;
         let temp_home =
             std::env::temp_dir().join(format!("zeroclaw_test_home_{}", uuid::Uuid::new_v4()));
-        let default_config_dir = temp_home.join(".zeroclaw");
+        let default_config_dir = temp_home.join(APP_DIR_NAME);
         let custom_config_dir = temp_home.join("profiles").join("custom-profile");
         let default_marker_path = default_config_dir.join(ACTIVE_WORKSPACE_STATE_FILE);
         let custom_marker_path = custom_config_dir.join(ACTIVE_WORKSPACE_STATE_FILE);

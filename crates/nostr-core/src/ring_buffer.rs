@@ -135,10 +135,7 @@ impl ConversationRingBuffer {
     /// Get message count for a specific group
     pub async fn get_group_message_count(&self, group: &str) -> usize {
         let groups = self.groups.read().await;
-        groups
-            .get(group)
-            .map(|buffer| buffer.len())
-            .unwrap_or(0)
+        groups.get(group).map(|buffer| buffer.len()).unwrap_or(0)
     }
 
     /// Clear messages for a specific group
@@ -161,7 +158,7 @@ mod tests {
     #[test]
     fn test_group_ring_buffer_basic() {
         let mut buffer = GroupRingBuffer::new(3);
-        
+
         // Test empty
         assert!(buffer.is_empty());
         assert_eq!(buffer.len(), 0);
@@ -186,7 +183,7 @@ mod tests {
     #[test]
     fn test_group_ring_buffer_wraparound() {
         let mut buffer = GroupRingBuffer::new(2);
-        
+
         // Fill buffer
         buffer.push(MessageEntry {
             author_pubkey: "author1".to_string(),
@@ -195,7 +192,7 @@ mod tests {
             timestamp: 1000,
             event_id: "event1".to_string(),
         });
-        
+
         buffer.push(MessageEntry {
             author_pubkey: "author2".to_string(),
             author_display_name: "Bob".to_string(),
@@ -222,23 +219,31 @@ mod tests {
     #[tokio::test]
     async fn test_conversation_ring_buffer() {
         let crb = ConversationRingBuffer::new(3);
-        
-        // Add messages to different groups
-        crb.push("group1", MessageEntry {
-            author_pubkey: "author1".to_string(),
-            author_display_name: "Alice".to_string(),
-            content_preview: "Group 1 message".to_string(),
-            timestamp: 1000,
-            event_id: "event1".to_string(),
-        }).await;
 
-        crb.push("group2", MessageEntry {
-            author_pubkey: "author2".to_string(),
-            author_display_name: "Bob".to_string(),
-            content_preview: "Group 2 message".to_string(),
-            timestamp: 2000,
-            event_id: "event2".to_string(),
-        }).await;
+        // Add messages to different groups
+        crb.push(
+            "group1",
+            MessageEntry {
+                author_pubkey: "author1".to_string(),
+                author_display_name: "Alice".to_string(),
+                content_preview: "Group 1 message".to_string(),
+                timestamp: 1000,
+                event_id: "event1".to_string(),
+            },
+        )
+        .await;
+
+        crb.push(
+            "group2",
+            MessageEntry {
+                author_pubkey: "author2".to_string(),
+                author_display_name: "Bob".to_string(),
+                content_preview: "Group 2 message".to_string(),
+                timestamp: 2000,
+                event_id: "event2".to_string(),
+            },
+        )
+        .await;
 
         // Test context retrieval
         let ctx1 = crb.get_context("group1", 5).await;

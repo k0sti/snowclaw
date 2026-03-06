@@ -1,0 +1,168 @@
+From 761c9113cc72d5db8829783b9656d052d1c230e8 Mon Sep 17 00:00:00 2001
+From: kosti <koshdot@proton.me>
+Date: Sun, 8 Mar 2026 11:40:48 +0200
+Subject: [PATCH 11/13] fix(schedule): honor approval for cron creates
+
+---
+ src/config/schema.rs  |  2 +-
+ src/cron/mod.rs       | 34 ++++++++++++++++++++++++++++++++++
+ src/onboard/wizard.rs |  3 ++-
+ src/skills/audit.rs   | 12 ++++++++++--
+ src/tools/schedule.rs |  6 +++---
+ 5 files changed, 50 insertions(+), 7 deletions(-)
+
+diff --git a/src/config/schema.rs b/src/config/schema.rs
+index adef9453..c1eff9a7 100644
+--- a/src/config/schema.rs
++++ b/src/config/schema.rs
+@@ -13638,7 +13638,7 @@ default_model = "legacy-model"
+         let _env_guard = env_override_lock().await;
+         let temp_home =
+             std::env::temp_dir().join(format!("zeroclaw_test_home_{}", uuid::Uuid::new_v4()));
+-        let default_config_dir = temp_home.join(".zeroclaw");
++        let default_config_dir = temp_home.join(APP_DIR_NAME);
+         let custom_config_dir = temp_home.join("profiles").join("custom-profile");
+         let default_marker_path = default_config_dir.join(ACTIVE_WORKSPACE_STATE_FILE);
+         let custom_marker_path = custom_config_dir.join(ACTIVE_WORKSPACE_STATE_FILE);
+diff --git a/src/cron/mod.rs b/src/cron/mod.rs
+index babbde82..1c7080f4 100644
+--- a/src/cron/mod.rs
++++ b/src/cron/mod.rs
+@@ -48,6 +48,19 @@ pub fn add_shell_job_with_approval(
+     store::add_shell_job(config, name, schedule, command)
+ }
+ 
++pub fn add_job_with_approval(
++    config: &Config,
++    expression: &str,
++    command: &str,
++    approved: bool,
++) -> Result<CronJob> {
++    let schedule = Schedule::Cron {
++        expr: expression.to_string(),
++        tz: None,
++    };
++    add_shell_job_with_approval(config, None, schedule, command, approved)
++}
++
+ pub fn add_job(config: &Config, expression: &str, command: &str) -> Result<CronJob> {
+     let schedule = Schedule::Cron {
+         expr: expression.to_string(),
+@@ -215,6 +228,17 @@ pub fn add_once(config: &Config, delay: &str, command: &str) -> Result<CronJob>
+     add_once_at(config, at, command)
+ }
+ 
++pub fn add_once_with_approval(
++    config: &Config,
++    delay: &str,
++    command: &str,
++    approved: bool,
++) -> Result<CronJob> {
++    let duration = parse_delay(delay)?;
++    let at = chrono::Utc::now() + duration;
++    add_once_at_with_approval(config, at, command, approved)
++}
++
+ pub fn add_once_at(
+     config: &Config,
+     at: chrono::DateTime<chrono::Utc>,
+@@ -224,6 +248,16 @@ pub fn add_once_at(
+     add_shell_job(config, None, schedule, command)
+ }
+ 
++pub fn add_once_at_with_approval(
++    config: &Config,
++    at: chrono::DateTime<chrono::Utc>,
++    command: &str,
++    approved: bool,
++) -> Result<CronJob> {
++    let schedule = Schedule::At { at };
++    add_shell_job_with_approval(config, None, schedule, command, approved)
++}
++
+ pub fn pause_job(config: &Config, id: &str) -> Result<CronJob> {
+     update_job(
+         config,
+diff --git a/src/onboard/wizard.rs b/src/onboard/wizard.rs
+index e6d44024..c6e53379 100644
+--- a/src/onboard/wizard.rs
++++ b/src/onboard/wizard.rs
+@@ -9041,7 +9041,8 @@ mod tests {
+         assert_eq!(backend_key_from_choice(2), "lucid");
+         assert_eq!(backend_key_from_choice(3), "cortex-mem");
+         assert_eq!(backend_key_from_choice(4), "markdown");
+-        assert_eq!(backend_key_from_choice(5), "none");
++        assert_eq!(backend_key_from_choice(5), "nomen");
++        assert_eq!(backend_key_from_choice(6), "none");
+         assert_eq!(backend_key_from_choice(999), "sqlite");
+     }
+ 
+diff --git a/src/skills/audit.rs b/src/skills/audit.rs
+index b2243fad..ab8e0545 100644
+--- a/src/skills/audit.rs
++++ b/src/skills/audit.rs
+@@ -841,13 +841,19 @@ mod tests {
+     fn audit_rejects_markdown_escape_links() {
+         let dir = tempfile::tempdir().unwrap();
+         let skill_dir = dir.path().join("escape");
++        let parent_dir = dir
++            .path()
++            .parent()
++            .expect("tempdir should have parent");
++        let outside_name = format!("outside-{}.md", uuid::Uuid::new_v4());
++        let outside_path = parent_dir.join(&outside_name);
+         std::fs::create_dir_all(&skill_dir).unwrap();
+         std::fs::write(
+             skill_dir.join("SKILL.md"),
+-            "# Skill\nRead [hidden](../outside.md)\n",
++            format!("# Skill\nRead [hidden](../../{outside_name})\n"),
+         )
+         .unwrap();
+-        std::fs::write(dir.path().join("outside.md"), "not allowed\n").unwrap();
++        std::fs::write(&outside_path, "not allowed\n").unwrap();
+ 
+         let report = audit_skill_directory(&skill_dir).unwrap();
+         assert!(
+@@ -857,6 +863,8 @@ mod tests {
+             "{:#?}",
+             report.findings
+         );
++
++        let _ = std::fs::remove_file(outside_path);
+     }
+ 
+     #[test]
+diff --git a/src/tools/schedule.rs b/src/tools/schedule.rs
+index 008ec8ad..b730b595 100644
+--- a/src/tools/schedule.rs
++++ b/src/tools/schedule.rs
+@@ -310,7 +310,7 @@ impl ScheduleTool {
+         }
+ 
+         if let Some(value) = expression {
+-            let job = cron::add_job(&self.config, value, command)?;
++            let job = cron::add_job_with_approval(&self.config, value, command, approved)?;
+             return Ok(ToolResult {
+                 success: true,
+                 output: format!(
+@@ -325,7 +325,7 @@ impl ScheduleTool {
+         }
+ 
+         if let Some(value) = delay {
+-            let job = cron::add_once(&self.config, value, command)?;
++            let job = cron::add_once_with_approval(&self.config, value, command, approved)?;
+             return Ok(ToolResult {
+                 success: true,
+                 output: format!(
+@@ -343,7 +343,7 @@ impl ScheduleTool {
+             .map_err(|error| anyhow::anyhow!("Invalid run_at timestamp: {error}"))?
+             .with_timezone(&Utc);
+ 
+-        let job = cron::add_once_at(&self.config, run_at_parsed, command)?;
++        let job = cron::add_once_at_with_approval(&self.config, run_at_parsed, command, approved)?;
+         Ok(ToolResult {
+             success: true,
+             output: format!(
+-- 
+2.52.0
+

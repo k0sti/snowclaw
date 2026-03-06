@@ -18,8 +18,8 @@ use crate::config::snowclaw_schema::CollectiveMemoryConfig;
 use async_trait::async_trait;
 use nostr_sdk::nips::nip44;
 use parking_lot::Mutex;
-use snow_memory::SqliteMemoryIndex;
 use snow_memory::types::{Memory as SnowMemory, MemoryTier};
+use snow_memory::SqliteMemoryIndex;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
@@ -79,10 +79,7 @@ impl CollectiveMemory {
     ///
     /// `workspace_dir` is used to resolve relative `db_path` values from config.
     /// If `relay_urls` is non-empty and `nsec` is provided, relay sync is enabled.
-    pub fn new(
-        workspace_dir: &Path,
-        config: &CollectiveMemoryConfig,
-    ) -> anyhow::Result<Self> {
+    pub fn new(workspace_dir: &Path, config: &CollectiveMemoryConfig) -> anyhow::Result<Self> {
         Self::new_with_relay(workspace_dir, config, None)
     }
 
@@ -259,10 +256,7 @@ impl CollectiveMemory {
             content["snow:operator"] = serde_json::json!(npub);
         }
 
-        let builder = nostr_sdk::EventBuilder::new(
-            nostr_sdk::Kind::Metadata,
-            content.to_string(),
-        );
+        let builder = nostr_sdk::EventBuilder::new(nostr_sdk::Kind::Metadata, content.to_string());
 
         relay
             .client
@@ -422,19 +416,13 @@ impl CollectiveMemory {
             .tags
             .iter()
             .map(|(k, v)| {
-                nostr_sdk::Tag::custom(
-                    nostr_sdk::TagKind::custom(k.clone()),
-                    vec![v.clone()],
-                )
+                nostr_sdk::Tag::custom(nostr_sdk::TagKind::custom(k.clone()), vec![v.clone()])
             })
             .collect();
         tags.extend(extra_tags);
 
-        let builder = nostr_sdk::EventBuilder::new(
-            nostr_sdk::Kind::Custom(30078),
-            &content,
-        )
-        .tags(tags);
+        let builder =
+            nostr_sdk::EventBuilder::new(nostr_sdk::Kind::Custom(30078), &content).tags(tags);
 
         let client = relay.client.clone();
 
@@ -490,11 +478,7 @@ impl CollectiveMemory {
 
             // Decrypt NIP-44 encrypted content if tagged
             if is_nip44_encrypted(event) {
-                match nip44::decrypt(
-                    relay.keys.secret_key(),
-                    &event.pubkey,
-                    &mem_event.content,
-                ) {
+                match nip44::decrypt(relay.keys.secret_key(), &event.pubkey, &mem_event.content) {
                     Ok(plaintext) => {
                         mem_event.content = plaintext;
                     }
@@ -510,14 +494,13 @@ impl CollectiveMemory {
 
             match snow_memory::event::memory_from_event(&mem_event) {
                 Ok(memory) => {
-                    let event_json = serde_json::to_string(
-                        &serde_json::json!({
-                            "id": event.id.to_hex(),
-                            "kind": event.kind.as_u16(),
-                            "pubkey": event.pubkey.to_hex(),
-                            "created_at": event.created_at.as_secs(),
-                        })
-                    ).ok();
+                    let event_json = serde_json::to_string(&serde_json::json!({
+                        "id": event.id.to_hex(),
+                        "kind": event.kind.as_u16(),
+                        "pubkey": event.pubkey.to_hex(),
+                        "created_at": event.created_at.as_secs(),
+                    }))
+                    .ok();
 
                     let idx = self.index.lock();
                     if let Err(e) = idx.upsert(&memory, event_json.as_deref()) {
@@ -544,9 +527,7 @@ impl CollectiveMemory {
             }
         }
 
-        tracing::info!(
-            "collective memory: synced {synced}/{total} events from relay"
-        );
+        tracing::info!("collective memory: synced {synced}/{total} events from relay");
         Ok(synced)
     }
 
@@ -821,18 +802,11 @@ fn memory_to_event_builder(memory: &SnowMemory) -> nostr_sdk::EventBuilder {
         .tags
         .iter()
         .map(|(k, v)| {
-            nostr_sdk::Tag::custom(
-                nostr_sdk::TagKind::custom(k.clone()),
-                vec![v.clone()],
-            )
+            nostr_sdk::Tag::custom(nostr_sdk::TagKind::custom(k.clone()), vec![v.clone()])
         })
         .collect();
 
-    nostr_sdk::EventBuilder::new(
-        nostr_sdk::Kind::Custom(30078),
-        &mem_event.content,
-    )
-    .tags(tags)
+    nostr_sdk::EventBuilder::new(nostr_sdk::Kind::Custom(30078), &mem_event.content).tags(tags)
 }
 
 /// Convert a `nostr_sdk::Event` to a `snow_memory::event::MemoryEvent`.
@@ -876,9 +850,7 @@ fn init_metadata_table(index: &SqliteMemoryIndex) -> anyhow::Result<()> {
 
 fn get_last_sync_timestamp(index: &SqliteMemoryIndex) -> Option<u64> {
     index
-        .query_raw(
-            "SELECT value FROM collective_metadata WHERE key = 'last_sync_timestamp'",
-        )
+        .query_raw("SELECT value FROM collective_metadata WHERE key = 'last_sync_timestamp'")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
 }
@@ -901,9 +873,7 @@ fn category_to_tier(category: &MemoryCategory) -> MemoryTier {
         MemoryCategory::Core => MemoryTier::Public,
         MemoryCategory::Daily => MemoryTier::Public,
         MemoryCategory::Conversation => MemoryTier::Private("self".to_string()),
-        MemoryCategory::Custom(name) if name == "group" => {
-            MemoryTier::Group("default".to_string())
-        }
+        MemoryCategory::Custom(name) if name == "group" => MemoryTier::Group("default".to_string()),
         MemoryCategory::Custom(_) => MemoryTier::Public,
     }
 }
@@ -933,8 +903,7 @@ fn tier_visible_in_context(tier: &MemoryTier, context: &RecallContext) -> bool {
         MemoryTier::Public => true,
         MemoryTier::Private(_) => context.is_main_session,
         MemoryTier::Group(group_id) => {
-            context.is_main_session
-                || context.group_id.as_deref() == Some(group_id.as_str())
+            context.is_main_session || context.group_id.as_deref() == Some(group_id.as_str())
         }
     }
 }
@@ -1090,12 +1059,10 @@ impl Memory for CollectiveMemory {
         category: Option<&MemoryCategory>,
         _session_id: Option<&str>,
     ) -> anyhow::Result<Vec<MemoryEntry>> {
-        let tier_filter = category.map(|c| {
-            match category_to_tier(c) {
-                MemoryTier::Public => "public",
-                MemoryTier::Group(_) => "group:",
-                MemoryTier::Private(_) => "private:",
-            }
+        let tier_filter = category.map(|c| match category_to_tier(c) {
+            MemoryTier::Public => "public",
+            MemoryTier::Group(_) => "group:",
+            MemoryTier::Private(_) => "private:",
         });
 
         let idx = self.index.lock();
@@ -1123,7 +1090,6 @@ impl Memory for CollectiveMemory {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1138,9 +1104,14 @@ mod tests {
         let mem = CollectiveMemory::new_in_memory(&test_config()).unwrap();
         assert_eq!(mem.count().await.unwrap(), 0);
 
-        mem.store("rust/errors", "How to handle errors in Rust", MemoryCategory::Core, None)
-            .await
-            .unwrap();
+        mem.store(
+            "rust/errors",
+            "How to handle errors in Rust",
+            MemoryCategory::Core,
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(mem.count().await.unwrap(), 1);
     }
 
@@ -1148,13 +1119,12 @@ mod tests {
     async fn store_and_recall() {
         let mut cfg = test_config();
         // Add self as a trusted source so ranking doesn't zero out
-        cfg.source_preferences.push(
-            crate::config::snowclaw_schema::CollectiveSourceEntry {
+        cfg.source_preferences
+            .push(crate::config::snowclaw_schema::CollectiveSourceEntry {
                 npub: Some("self".to_string()),
                 group: None,
                 trust: 1.0,
-            },
-        );
+            });
 
         let mem = CollectiveMemory::new_in_memory(&cfg).unwrap();
 
@@ -1273,13 +1243,10 @@ mod tests {
         })
         .to_string();
 
-        let event = nostr_sdk::EventBuilder::new(
-            nostr_sdk::Kind::Custom(30078),
-            &content,
-        )
-        .tags(tags)
-        .sign_with_keys(&keys)
-        .unwrap();
+        let event = nostr_sdk::EventBuilder::new(nostr_sdk::Kind::Custom(30078), &content)
+            .tags(tags)
+            .sign_with_keys(&keys)
+            .unwrap();
 
         let mem_event = nostr_event_to_memory_event(&event);
 
@@ -1365,25 +1332,19 @@ mod tests {
         let keys = nostr_sdk::Keys::generate();
 
         // Event without encryption tag
-        let plain_event = nostr_sdk::EventBuilder::new(
-            nostr_sdk::Kind::Custom(30078),
-            "plaintext",
-        )
-        .sign_with_keys(&keys)
-        .unwrap();
+        let plain_event = nostr_sdk::EventBuilder::new(nostr_sdk::Kind::Custom(30078), "plaintext")
+            .sign_with_keys(&keys)
+            .unwrap();
         assert!(!is_nip44_encrypted(&plain_event));
 
         // Event with encryption tag
-        let enc_event = nostr_sdk::EventBuilder::new(
-            nostr_sdk::Kind::Custom(30078),
-            "ciphertext",
-        )
-        .tags(vec![nostr_sdk::Tag::custom(
-            nostr_sdk::TagKind::custom("encrypted"),
-            vec!["nip44".to_string()],
-        )])
-        .sign_with_keys(&keys)
-        .unwrap();
+        let enc_event = nostr_sdk::EventBuilder::new(nostr_sdk::Kind::Custom(30078), "ciphertext")
+            .tags(vec![nostr_sdk::Tag::custom(
+                nostr_sdk::TagKind::custom("encrypted"),
+                vec!["nip44".to_string()],
+            )])
+            .sign_with_keys(&keys)
+            .unwrap();
         assert!(is_nip44_encrypted(&enc_event));
     }
 
@@ -1431,9 +1392,18 @@ mod tests {
         assert!(matches!(scope_to_tier("core:timezone"), MemoryTier::Public));
         assert!(matches!(scope_to_tier("lesson:rust"), MemoryTier::Public));
         assert!(matches!(scope_to_tier("pref:lang"), MemoryTier::Private(_)));
-        assert!(matches!(scope_to_tier("contact:abc"), MemoryTier::Private(_)));
-        assert!(matches!(scope_to_tier("conv:session1"), MemoryTier::Private(_)));
-        assert!(matches!(scope_to_tier("group:nostr-dev"), MemoryTier::Group(_)));
+        assert!(matches!(
+            scope_to_tier("contact:abc"),
+            MemoryTier::Private(_)
+        ));
+        assert!(matches!(
+            scope_to_tier("conv:session1"),
+            MemoryTier::Private(_)
+        ));
+        assert!(matches!(
+            scope_to_tier("group:nostr-dev"),
+            MemoryTier::Group(_)
+        ));
         assert!(matches!(scope_to_tier("unknown_key"), MemoryTier::Public));
     }
 
@@ -1446,7 +1416,11 @@ mod tests {
             about: "Snowclaw instance on studio".to_string(),
             model: "anthropic/claude-opus-4-6".to_string(),
             version: "0.1.7".to_string(),
-            capabilities: vec!["memory".to_string(), "code".to_string(), "nostr".to_string()],
+            capabilities: vec![
+                "memory".to_string(),
+                "code".to_string(),
+                "nostr".to_string(),
+            ],
             operator_npub: Some("npub1testoperator".to_string()),
         };
 
@@ -1459,10 +1433,7 @@ mod tests {
         });
         content["snow:operator"] = serde_json::json!(profile.operator_npub);
 
-        let builder = nostr_sdk::EventBuilder::new(
-            nostr_sdk::Kind::Metadata,
-            content.to_string(),
-        );
+        let builder = nostr_sdk::EventBuilder::new(nostr_sdk::Kind::Metadata, content.to_string());
 
         let event = builder.sign_with_keys(&keys).unwrap();
 
@@ -1558,9 +1529,14 @@ mod forget_list_tests {
     async fn forget_deletes_by_topic() {
         let mem = CollectiveMemory::new_in_memory(&test_config()).unwrap();
 
-        mem.store("rust/errors", "How to handle errors", MemoryCategory::Core, None)
-            .await
-            .unwrap();
+        mem.store(
+            "rust/errors",
+            "How to handle errors",
+            MemoryCategory::Core,
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(mem.count().await.unwrap(), 1);
 
         // Forget existing topic
@@ -1580,9 +1556,14 @@ mod forget_list_tests {
         mem.store("rust/errors", "Error handling", MemoryCategory::Core, None)
             .await
             .unwrap();
-        mem.store("nostr/nip44", "NIP-44 encryption", MemoryCategory::Core, None)
-            .await
-            .unwrap();
+        mem.store(
+            "nostr/nip44",
+            "NIP-44 encryption",
+            MemoryCategory::Core,
+            None,
+        )
+        .await
+        .unwrap();
 
         let all = mem.list(None, None).await.unwrap();
         assert_eq!(all.len(), 2);
@@ -1597,9 +1578,14 @@ mod forget_list_tests {
             .await
             .unwrap();
         // Store a private memory (Conversation -> Private tier)
-        mem.store("conv:session1", "Session context", MemoryCategory::Conversation, None)
-            .await
-            .unwrap();
+        mem.store(
+            "conv:session1",
+            "Session context",
+            MemoryCategory::Conversation,
+            None,
+        )
+        .await
+        .unwrap();
 
         // Filter by Core (Public tier)
         let public = mem.list(Some(&MemoryCategory::Core), None).await.unwrap();
@@ -1607,7 +1593,10 @@ mod forget_list_tests {
         assert_eq!(public[0].key, "core:timezone");
 
         // Filter by Conversation (Private tier)
-        let private = mem.list(Some(&MemoryCategory::Conversation), None).await.unwrap();
+        let private = mem
+            .list(Some(&MemoryCategory::Conversation), None)
+            .await
+            .unwrap();
         assert_eq!(private.len(), 1);
         assert_eq!(private[0].key, "conv:session1");
     }
@@ -1646,8 +1635,22 @@ mod forget_list_tests {
     fn detect_conflicts_same_topic_different_sources() {
         let mem = CollectiveMemory::new_in_memory(&test_config()).unwrap();
 
-        insert_test_memory(&mem, "a1", "rust/errors", "Use anyhow for errors", "agent_alpha", 1);
-        insert_test_memory(&mem, "b1", "rust/errors", "Use thiserror for errors", "agent_beta", 1);
+        insert_test_memory(
+            &mem,
+            "a1",
+            "rust/errors",
+            "Use anyhow for errors",
+            "agent_alpha",
+            1,
+        );
+        insert_test_memory(
+            &mem,
+            "b1",
+            "rust/errors",
+            "Use thiserror for errors",
+            "agent_beta",
+            1,
+        );
 
         let conflicts = mem.detect_conflicts("errors").unwrap();
         assert_eq!(conflicts.len(), 1);
@@ -1655,7 +1658,11 @@ mod forget_list_tests {
         assert_eq!(conflicts[0].entries.len(), 2);
 
         // Both sources should be represented
-        let sources: Vec<&str> = conflicts[0].entries.iter().map(|e| e.source.as_str()).collect();
+        let sources: Vec<&str> = conflicts[0]
+            .entries
+            .iter()
+            .map(|e| e.source.as_str())
+            .collect();
         assert!(sources.contains(&"agent_alpha"));
         assert!(sources.contains(&"agent_beta"));
     }
@@ -1676,8 +1683,22 @@ mod forget_list_tests {
     fn detect_conflicts_no_duplicates_returns_empty() {
         let mem = CollectiveMemory::new_in_memory(&test_config()).unwrap();
 
-        insert_test_memory(&mem, "a1", "rust/errors", "Use anyhow for errors", "agent_alpha", 1);
-        insert_test_memory(&mem, "b1", "nostr/nip44", "NIP-44 encryption", "agent_beta", 1);
+        insert_test_memory(
+            &mem,
+            "a1",
+            "rust/errors",
+            "Use anyhow for errors",
+            "agent_alpha",
+            1,
+        );
+        insert_test_memory(
+            &mem,
+            "b1",
+            "nostr/nip44",
+            "NIP-44 encryption",
+            "agent_beta",
+            1,
+        );
 
         // Search for errors should only find one topic
         let conflicts = mem.detect_conflicts("errors").unwrap();
@@ -1784,7 +1805,9 @@ mod promote_tests {
 
     #[test]
     fn tier_rank_ordering() {
-        assert!(tier_rank(&MemoryTier::Private("s".into())) < tier_rank(&MemoryTier::Group("g".into())));
+        assert!(
+            tier_rank(&MemoryTier::Private("s".into())) < tier_rank(&MemoryTier::Group("g".into()))
+        );
         assert!(tier_rank(&MemoryTier::Group("g".into())) < tier_rank(&MemoryTier::Public));
         assert!(tier_rank(&MemoryTier::Private("s".into())) < tier_rank(&MemoryTier::Public));
     }

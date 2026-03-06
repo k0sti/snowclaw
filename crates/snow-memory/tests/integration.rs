@@ -1,6 +1,6 @@
-use snow_memory::*;
-use snow_memory::search::SqliteMemoryIndex;
 use snow_memory::config::MemoryConfig;
+use snow_memory::search::SqliteMemoryIndex;
+use snow_memory::*;
 use std::path::Path;
 
 #[test]
@@ -10,35 +10,47 @@ fn test_full_pipeline() {
 
     // Two agents, different models, same topic — potential conflict
     let m1 = Memory {
-        id: "mem1".into(), tier: MemoryTier::Public,
+        id: "mem1".into(),
+        tier: MemoryTier::Public,
         topic: "nostr/nip44".into(),
         summary: "NIP-44 uses XChaCha20-Poly1305 for encryption".into(),
         detail: "Always use NIP-44 over NIP-04 for new implementations".into(),
-        context: None, source: "agent_opus".into(),
+        context: None,
+        source: "agent_opus".into(),
         model: "anthropic/claude-opus-4".into(),
-        confidence: 0.95, supersedes: None, version: 1,
+        confidence: 0.95,
+        supersedes: None,
+        version: 1,
         tags: vec!["nostr".into(), "encryption".into()],
         created_at: 1700000000,
     };
     let m2 = Memory {
-        id: "mem2".into(), tier: MemoryTier::Public,
+        id: "mem2".into(),
+        tier: MemoryTier::Public,
         topic: "nostr/nip44".into(),
         summary: "NIP-44 encryption is optional for relay messages".into(),
         detail: "NIP-04 is fine for backwards compatibility".into(),
-        context: None, source: "agent_llama".into(),
+        context: None,
+        source: "agent_llama".into(),
         model: "meta/llama-3-8b".into(),
-        confidence: 0.6, supersedes: None, version: 1,
+        confidence: 0.6,
+        supersedes: None,
+        version: 1,
         tags: vec!["nostr".into(), "encryption".into()],
         created_at: 1700000100,
     };
     let m3 = Memory {
-        id: "mem3".into(), tier: MemoryTier::Group("snowclaw-core".into()),
+        id: "mem3".into(),
+        tier: MemoryTier::Group("snowclaw-core".into()),
         topic: "rust/error-handling".into(),
         summary: "Use anyhow for applications and thiserror for libraries".into(),
         detail: "Standard Rust error handling pattern".into(),
-        context: None, source: "agent_opus".into(),
+        context: None,
+        source: "agent_opus".into(),
         model: "anthropic/claude-opus-4".into(),
-        confidence: 0.9, supersedes: None, version: 1,
+        confidence: 0.9,
+        supersedes: None,
+        version: 1,
         tags: vec!["rust".into()],
         created_at: 1700000200,
     };
@@ -60,14 +72,19 @@ fn test_full_pipeline() {
 
     // Ranked search — opus agent should rank higher than llama
     let config = MemoryConfig::default();
-    let ranked = idx.ranked_search("NIP-44 encryption", None, &config, 10).unwrap();
+    let ranked = idx
+        .ranked_search("NIP-44 encryption", None, &config, 10)
+        .unwrap();
     assert!(!ranked.is_empty());
     // Both should appear, ranking depends on config defaults
 
     // Conflict detection
     let all_memories = vec![m1.clone(), m2.clone(), m3.clone()];
     let conflicts = detect_conflicts(&all_memories);
-    assert!(!conflicts.is_empty(), "Should detect conflict on nostr/nip44 topic");
+    assert!(
+        !conflicts.is_empty(),
+        "Should detect conflict on nostr/nip44 topic"
+    );
     assert_eq!(conflicts[0].topic, "nostr/nip44");
 
     // Supersedes chain

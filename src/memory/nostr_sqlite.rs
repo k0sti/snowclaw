@@ -171,9 +171,7 @@ impl NostrSqliteMemory {
             None => return Ok(0),
         };
 
-        let filter = Filter::new()
-            .author(*public_key)
-            .kind(Kind::Custom(30078));
+        let filter = Filter::new().author(*public_key).kind(Kind::Custom(30078));
 
         let events = client
             .fetch_events(filter, Duration::from_secs(15))
@@ -244,9 +242,7 @@ impl NostrSqliteMemory {
         }
 
         if synced > 0 {
-            info!(
-                "Nostr→SQLite sync complete: {synced}/{total} events indexed"
-            );
+            info!("Nostr→SQLite sync complete: {synced}/{total} events indexed");
         } else {
             debug!("Nostr→SQLite sync: no new events to index ({total} total on relay)");
         }
@@ -300,12 +296,7 @@ impl NostrSqliteMemory {
         // Encrypt content with NIP-44 if enabled
         let publish_content = if self.encrypted {
             if let Some(keys) = self.keys() {
-                match nip44::encrypt(
-                    keys.secret_key(),
-                    &public_key,
-                    content,
-                    nip44::Version::V2,
-                ) {
+                match nip44::encrypt(keys.secret_key(), &public_key, content, nip44::Version::V2) {
                     Ok(ciphertext) => {
                         tags.push(Tag::custom(
                             TagKind::custom("encrypted"),

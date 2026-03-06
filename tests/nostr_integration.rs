@@ -3,8 +3,6 @@
 //! Requires the `nak` binary (available at `/run/current-system/sw/bin/nak`).
 //! Run with: `cargo test -- --ignored nostr_integration`
 
-mod common;
-
 use nostr_sdk::prelude::*;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -63,8 +61,10 @@ async fn nostr_integration_group_messaging() {
         mention_names: vec!["snowclaw".to_string()],
         owner: None,
         context_history: 20,
+        extra_kinds: Vec::new(),
         persist_dir: std::path::PathBuf::from("/tmp/snowclaw-test"),
         indexed_paths: Vec::new(),
+        index_interval_minutes: 60,
     };
 
     let agent_channel = NostrChannel::new(agent_config)
@@ -75,9 +75,7 @@ async fn nostr_integration_group_messaging() {
     let (tx, mut rx) = mpsc::channel(32);
     let agent_channel_ref = std::sync::Arc::new(agent_channel);
     let listener_channel = agent_channel_ref.clone();
-    let listener_handle = tokio::spawn(async move {
-        listener_channel.listen(tx).await
-    });
+    let listener_handle = tokio::spawn(async move { listener_channel.listen(tx).await });
 
     // Give subscription time to propagate
     tokio::time::sleep(Duration::from_millis(500)).await;
@@ -88,7 +86,10 @@ async fn nostr_integration_group_messaging() {
     user_client.connect().await;
     tokio::time::sleep(Duration::from_millis(300)).await;
 
-    let tags = vec![Tag::custom(TagKind::custom("h"), vec!["test-group".to_string()])];
+    let tags = vec![Tag::custom(
+        TagKind::custom("h"),
+        vec!["test-group".to_string()],
+    )];
     let event_builder = EventBuilder::new(Kind::Custom(9), "Hello from user!").tags(tags);
     let send_output = user_client
         .send_event_builder(event_builder)

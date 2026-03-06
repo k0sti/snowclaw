@@ -1,0 +1,43 @@
+From 84f5ff62ad7776b5d76e926f82b95f9987219a9d Mon Sep 17 00:00:00 2001
+From: kosti <koshdot@proton.me>
+Date: Sun, 8 Mar 2026 01:04:29 +0200
+Subject: [PATCH 06/13] fix: adapter get/forget use raw topic queries after
+ v0.2 d-tag change
+
+get() and forget() now use get_by_raw_topic()/delete_by_topic()
+which query the topic field instead of d_tag, fixing lookup mismatches
+introduced when store() switched to v0.2 d-tag format.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+---
+ src/memory/nomen_adapter.rs | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/src/memory/nomen_adapter.rs b/src/memory/nomen_adapter.rs
+index 3ac00d0f..89f085cf 100644
+--- a/src/memory/nomen_adapter.rs
++++ b/src/memory/nomen_adapter.rs
+@@ -160,7 +160,7 @@ impl Memory for NomenMemory {
+ 
+     async fn get(&self, key: &str) -> anyhow::Result<Option<MemoryEntry>> {
+         let nomen = self.nomen().await?;
+-        let record = nomen.get_by_topic(key).await?;
++        let record = nomen.get_by_raw_topic(key).await?;
+         Ok(record.as_ref().map(record_to_entry))
+     }
+ 
+@@ -179,9 +179,9 @@ impl Memory for NomenMemory {
+ 
+     async fn forget(&self, key: &str) -> anyhow::Result<bool> {
+         let nomen = self.nomen().await?;
+-        let exists = nomen.get_by_topic(key).await?.is_some();
++        let exists = nomen.get_by_raw_topic(key).await?.is_some();
+         if exists {
+-            nomen.delete(Some(key), None).await?;
++            nomen.delete_by_topic(key).await?;
+         }
+         Ok(exists)
+     }
+-- 
+2.52.0
+

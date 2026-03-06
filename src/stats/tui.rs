@@ -84,7 +84,7 @@ fn draw(frame: &mut Frame, stats: &StatsResult, records: &[crate::cost::types::C
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3),  // Header summary
-            Constraint::Min(8),    // Recent requests
+            Constraint::Min(8),     // Recent requests
             Constraint::Length(12), // Bottom section (breakdown + rooms)
             Constraint::Length(3),  // Footer
         ])
@@ -122,11 +122,7 @@ fn draw_header(frame: &mut Frame, area: Rect, stats: &StatsResult) {
     frame.render_widget(paragraph, area);
 }
 
-fn draw_recent_requests(
-    frame: &mut Frame,
-    area: Rect,
-    records: &[crate::cost::types::CostRecord],
-) {
+fn draw_recent_requests(frame: &mut Frame, area: Rect, records: &[crate::cost::types::CostRecord]) {
     let today = Utc::now().date_naive();
     let mut today_records: Vec<&crate::cost::types::CostRecord> = records
         .iter()
@@ -143,7 +139,11 @@ fn draw_recent_requests(
         Cell::from("Cost"),
         Cell::from("Model"),
     ])
-    .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
+    .style(
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+    );
 
     let rows: Vec<Row> = today_records
         .iter()
@@ -236,8 +236,7 @@ fn draw_breakdown(frame: &mut Frame, area: Rect, stats: &StatsResult) {
         let paragraph = Paragraph::new(lines).block(block);
         frame.render_widget(paragraph, area);
     } else {
-        let paragraph =
-            Paragraph::new("No breakdown data available").block(block);
+        let paragraph = Paragraph::new("No breakdown data available").block(block);
         frame.render_widget(paragraph, area);
     }
 }

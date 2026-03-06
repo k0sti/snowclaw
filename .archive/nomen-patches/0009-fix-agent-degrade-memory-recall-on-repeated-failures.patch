@@ -1,0 +1,628 @@
+From e9470f6e28361964dbaf6b371c1572b8a5b660d3 Mon Sep 17 00:00:00 2001
+From: kosti <koshdot@proton.me>
+Date: Sun, 8 Mar 2026 11:03:40 +0200
+Subject: [PATCH 09/13] fix(agent): degrade memory recall on repeated failures
+
+---
+ src/agent/loop_.rs           | 188 ++++++++++++++++++-
+ src/agent/loop_/execution.rs | 350 ++++++++++++++++++++++++++++++-----
+ 2 files changed, 493 insertions(+), 45 deletions(-)
+
+diff --git a/src/agent/loop_.rs b/src/agent/loop_.rs
+index 93d79534..519d7f2e 100644
+--- a/src/agent/loop_.rs
++++ b/src/agent/loop_.rs
+@@ -72,6 +72,9 @@ const MAX_TOKENS_CONTINUATION_PROMPT: &str = "Previous response was truncated by
+ const MAX_TOKENS_CONTINUATION_NOTICE: &str =
+     "\n\n[Response may be truncated due to continuation limits. Reply \"continue\" to resume.]";
+ 
++/// Default failures before memory recall is marked unavailable for the run.
++const MEMORY_RECALL_FAILURE_THRESHOLD_DEFAULT: usize = 3;
++
+ /// Returned when canary token exfiltration is detected in model output.
+ const CANARY_EXFILTRATION_BLOCK_MESSAGE: &str =
+     "I blocked that response because it attempted to reveal protected internal context.";
+@@ -1251,8 +1254,16 @@ pub async fn run_tool_call_loop(
+     let ld_config = LOOP_DETECTION_CONFIG
+         .try_with(Clone::clone)
+         .unwrap_or_default();
++    let memory_recall_failure_threshold = if ld_config.failure_streak_threshold == 0 {
++        MEMORY_RECALL_FAILURE_THRESHOLD_DEFAULT
++    } else {
++        ld_config.failure_streak_threshold
++    };
+     let mut loop_detector = LoopDetector::new(ld_config);
+     let mut loop_detection_prompt: Option<String> = None;
++    let mut memory_recall_failures = 0usize;
++    let mut memory_recall_unavailable = false;
++    let mut memory_recall_root_error: Option<String> = None;
+     let heartbeat_config = SAFETY_HEARTBEAT_CONFIG
+         .try_with(Clone::clone)
+         .ok()
+@@ -2157,6 +2168,42 @@ pub async fn run_tool_call_loop(
+                 continue;
+             }
+ 
++            if memory_recall_unavailable && tool_name == "memory_recall" {
++                let root = memory_recall_root_error
++                    .clone()
++                    .unwrap_or_else(|| "unknown error".to_string());
++                let blocked = format!(
++                    "Memory recall is temporarily unavailable for this run after repeated failures. \
++Root error: {root}"
++                );
++                runtime_trace::record_event(
++                    "tool_call_result",
++                    Some(channel_name),
++                    Some(provider_name),
++                    Some(active_model.as_str()),
++                    Some(&turn_id),
++                    Some(false),
++                    Some(&blocked),
++                    serde_json::json!({
++                        "iteration": iteration + 1,
++                        "tool": tool_name.clone(),
++                        "arguments": scrub_credentials(&tool_args.to_string()),
++                        "memory_recall_unavailable": true,
++                    }),
++                );
++                ordered_results[idx] = Some((
++                    tool_name.clone(),
++                    call.tool_call_id.clone(),
++                    ToolExecutionOutcome {
++                        output: blocked.clone(),
++                        success: false,
++                        error_reason: Some(blocked),
++                        duration: Duration::ZERO,
++                    },
++                ));
++                continue;
++            }
++
+             // ── Approval hook ────────────────────────────────
+             if let Some(mgr) = approval {
+                 let non_cli_session_granted =
+@@ -2446,8 +2493,42 @@ pub async fn run_tool_call_loop(
+                 }
+             }
+ 
++            let mut skip_loop_detector = false;
++            if call.name == "memory_recall" {
++                if outcome.success {
++                    memory_recall_failures = 0;
++                } else {
++                    let error_text = outcome
++                        .error_reason
++                        .clone()
++                        .filter(|text| !text.is_empty())
++                        .unwrap_or_else(|| outcome.output.clone());
++                    if memory_recall_root_error.is_none() && !error_text.is_empty() {
++                        memory_recall_root_error = Some(error_text.clone());
++                    }
++                    let next_failures = memory_recall_failures.saturating_add(1);
++                    if next_failures >= memory_recall_failure_threshold {
++                        memory_recall_unavailable = true;
++                        memory_recall_failures = next_failures;
++                        skip_loop_detector = true;
++                        let root = memory_recall_root_error
++                            .clone()
++                            .unwrap_or_else(|| error_text.clone());
++                        let blocked = format!(
++                            "Memory recall is temporarily unavailable for this run after {} failed attempts. \
++Root error: {root}",
++                            next_failures
++                        );
++                        outcome.output = blocked.clone();
++                        outcome.error_reason = Some(blocked);
++                    } else {
++                        memory_recall_failures = next_failures;
++                    }
++                }
++            }
++
+             // ── Loop detection: record call ──────────────────────
+-            {
++            if !skip_loop_detector {
+                 let sig = tool_call_signature(&call.name, &call.arguments);
+                 loop_detector.record_call(&sig.0, &sig.1, &outcome.output, outcome.success);
+             }
+@@ -4172,6 +4253,49 @@ mod tests {
+         }
+     }
+ 
++    struct FailingMemoryRecallTool {
++        invocations: Arc<AtomicUsize>,
++    }
++
++    impl FailingMemoryRecallTool {
++        fn new(invocations: Arc<AtomicUsize>) -> Self {
++            Self { invocations }
++        }
++    }
++
++    #[async_trait]
++    impl Tool for FailingMemoryRecallTool {
++        fn name(&self) -> &str {
++            "memory_recall"
++        }
++
++        fn description(&self) -> &str {
++            "Fails memory recall for loop recovery tests"
++        }
++
++        fn parameters_schema(&self) -> serde_json::Value {
++            serde_json::json!({
++                "type": "object",
++                "properties": {
++                    "query": { "type": "string" }
++                },
++                "required": ["query"]
++            })
++        }
++
++        async fn execute(
++            &self,
++            _args: serde_json::Value,
++        ) -> anyhow::Result<crate::tools::ToolResult> {
++            self.invocations.fetch_add(1, Ordering::SeqCst);
++            Ok(crate::tools::ToolResult {
++                success: false,
++                output: String::new(),
++                error: Some("memory backend unavailable".to_string()),
++            })
++        }
++    }
++
+     struct ErrorCaptureHook {
+         seen_errors: Arc<Mutex<Vec<Option<String>>>>,
+     }
+@@ -7681,4 +7805,66 @@ Let me check the result."#;
+         assert!(completed.contains("✅ shell (2s)"));
+         assert!(completed.contains("❌ web_search (1s)"));
+     }
++
++    #[tokio::test]
++    async fn run_tool_call_loop_disables_memory_recall_after_failures() {
++        let provider = ScriptedProvider::from_text_responses(vec![
++            r#"<tool_call>
++{"name":"memory_recall","arguments":{"query":"first"}}
++</tool_call>"#,
++            r#"<tool_call>
++{"name":"memory_recall","arguments":{"query":"second"}}
++</tool_call>"#,
++            r#"<tool_call>
++{"name":"memory_recall","arguments":{"query":"third"}}
++</tool_call>"#,
++            r#"<tool_call>
++{"name":"memory_recall","arguments":{"query":"fourth"}}
++</tool_call>"#,
++            "done",
++        ]);
++
++        let invocations = Arc::new(AtomicUsize::new(0));
++        let tools_registry: Vec<Box<dyn Tool>> =
++            vec![Box::new(FailingMemoryRecallTool::new(Arc::clone(&invocations)))];
++        let mut history = vec![
++            ChatMessage::system("test-system"),
++            ChatMessage::user("recall memory"),
++        ];
++        let observer = NoopObserver;
++
++        let result = run_tool_call_loop(
++            &provider,
++            &mut history,
++            &tools_registry,
++            &observer,
++            "mock-provider",
++            "mock-model",
++            0.0,
++            true,
++            None,
++            "cli",
++            &crate::config::MultimodalConfig::default(),
++            6,
++            None,
++            None,
++            None,
++            &[],
++        )
++        .await
++        .expect("loop should continue after disabling memory recall");
++
++        assert_eq!(result, "done");
++        assert_eq!(
++            invocations.load(Ordering::SeqCst),
++            3,
++            "memory_recall tool should stop executing after repeated failures"
++        );
++        assert!(
++            history
++                .iter()
++                .any(|msg| msg.content.contains("Memory recall is temporarily unavailable")),
++            "history should include unavailable notice"
++        );
++    }
+ }
+diff --git a/src/agent/loop_/execution.rs b/src/agent/loop_/execution.rs
+index ddde1bab..bb50242f 100644
+--- a/src/agent/loop_/execution.rs
++++ b/src/agent/loop_/execution.rs
+@@ -5,6 +5,7 @@ use crate::observability::{Observer, ObserverEvent};
+ use crate::tools::Tool;
+ use anyhow::Result;
+ use std::time::{Duration, Instant};
++use tokio::time::sleep;
+ use tokio_util::sync::CancellationToken;
+ 
+ fn find_tool<'a>(tools: &'a [Box<dyn Tool>], name: &str) -> Option<&'a dyn Tool> {
+@@ -38,55 +39,83 @@ async fn execute_one_tool(
+         });
+     };
+ 
+-    let tool_future = tool.execute(call_arguments);
+-    let tool_result = if let Some(token) = cancellation_token {
+-        tokio::select! {
+-            () = token.cancelled() => return Err(ToolLoopCancelled.into()),
+-            result = tool_future => result,
+-        }
+-    } else {
+-        tool_future.await
+-    };
++    let mut attempts = 0;
++    let mut first_error: Option<String> = None;
+ 
+-    match tool_result {
+-        Ok(r) => {
+-            let duration = start.elapsed();
+-            observer.record_event(&ObserverEvent::ToolCall {
+-                tool: call_name.to_string(),
+-                duration,
+-                success: r.success,
+-            });
+-            if r.success {
+-                Ok(ToolExecutionOutcome {
+-                    output: scrub_credentials(&r.output),
+-                    success: true,
+-                    error_reason: None,
+-                    duration,
+-                })
+-            } else {
++    loop {
++        let tool_future = tool.execute(call_arguments.clone());
++        let tool_result = if let Some(token) = cancellation_token {
++            tokio::select! {
++                () = token.cancelled() => return Err(ToolLoopCancelled.into()),
++                result = tool_future => result,
++            }
++        } else {
++            tool_future.await
++        };
++
++        match tool_result {
++            Ok(r) => {
++                if r.success {
++                    let duration = start.elapsed();
++                    observer.record_event(&ObserverEvent::ToolCall {
++                        tool: call_name.to_string(),
++                        duration,
++                        success: true,
++                    });
++                    return Ok(ToolExecutionOutcome {
++                        output: scrub_credentials(&r.output),
++                        success: true,
++                        error_reason: None,
++                        duration,
++                    });
++                }
+                 let reason = r.error.unwrap_or(r.output);
+-                Ok(ToolExecutionOutcome {
+-                    output: format!("Error: {reason}"),
++                if first_error.is_none() {
++                    first_error = Some(reason.clone());
++                }
++                if is_transient_tool_error(&reason) && attempts < MAX_TRANSIENT_RETRIES {
++                    attempts += 1;
++                    backoff_sleep(attempts, cancellation_token).await?;
++                    continue;
++                }
++                let duration = start.elapsed();
++                observer.record_event(&ObserverEvent::ToolCall {
++                    tool: call_name.to_string(),
++                    duration,
+                     success: false,
+-                    error_reason: Some(scrub_credentials(&reason)),
++                });
++                let (output, error_reason) = finalize_error(&reason, first_error.as_deref());
++                return Ok(ToolExecutionOutcome {
++                    output,
++                    success: false,
++                    error_reason: error_reason.map(|err| scrub_credentials(&err)),
+                     duration,
+-                })
++                });
++            }
++            Err(e) => {
++                let reason = format!("Error executing {call_name}: {e}");
++                if first_error.is_none() {
++                    first_error = Some(reason.clone());
++                }
++                if is_transient_tool_error(&reason) && attempts < MAX_TRANSIENT_RETRIES {
++                    attempts += 1;
++                    backoff_sleep(attempts, cancellation_token).await?;
++                    continue;
++                }
++                let duration = start.elapsed();
++                observer.record_event(&ObserverEvent::ToolCall {
++                    tool: call_name.to_string(),
++                    duration,
++                    success: false,
++                });
++                let (output, error_reason) = finalize_error(&reason, first_error.as_deref());
++                return Ok(ToolExecutionOutcome {
++                    output,
++                    success: false,
++                    error_reason: error_reason.map(|err| scrub_credentials(&err)),
++                    duration,
++                });
+             }
+-        }
+-        Err(e) => {
+-            let duration = start.elapsed();
+-            observer.record_event(&ObserverEvent::ToolCall {
+-                tool: call_name.to_string(),
+-                duration,
+-                success: false,
+-            });
+-            let reason = format!("Error executing {call_name}: {e}");
+-            Ok(ToolExecutionOutcome {
+-                output: reason.clone(),
+-                success: false,
+-                error_reason: Some(scrub_credentials(&reason)),
+-                duration,
+-            })
+         }
+     }
+ }
+@@ -98,6 +127,239 @@ pub(super) struct ToolExecutionOutcome {
+     pub(super) duration: Duration,
+ }
+ 
++const MAX_TRANSIENT_RETRIES: usize = 2;
++const TRANSIENT_RETRY_BACKOFF_BASE_MS: u64 = 200;
++const TRANSIENT_RETRY_BACKOFF_MAX_MS: u64 = 2_000;
++
++fn is_transient_tool_error(message: &str) -> bool {
++    let msg = message.to_lowercase();
++    let has_timeout = msg.contains("timeout") || msg.contains("timed out");
++    let has_rate_limit =
++        msg.contains("too many requests") || msg.contains("rate limit") || msg.contains("429");
++    let has_5xx = msg.contains("5xx")
++        || msg.contains("status 500")
++        || msg.contains("status=500")
++        || msg.contains("status 502")
++        || msg.contains("status=502")
++        || msg.contains("status 503")
++        || msg.contains("status=503")
++        || msg.contains("status 504")
++        || msg.contains("status=504")
++        || msg.contains("http 500")
++        || msg.contains("http 502")
++        || msg.contains("http 503")
++        || msg.contains("http 504")
++        || msg.contains("status code 5")
++        || msg.contains("http 5");
++    let has_network = msg.contains("network")
++        || msg.contains("connection")
++        || msg.contains("connect")
++        || msg.contains("dns")
++        || msg.contains("socket")
++        || msg.contains("refused")
++        || msg.contains("reset")
++        || msg.contains("unreachable");
++    has_timeout || has_rate_limit || has_5xx || has_network
++}
++
++async fn backoff_sleep(
++    attempt: usize,
++    cancellation_token: Option<&CancellationToken>,
++) -> Result<()> {
++    let exponent = attempt.saturating_sub(1).min(6) as u32;
++    let backoff_ms = (TRANSIENT_RETRY_BACKOFF_BASE_MS.saturating_mul(2u64.pow(exponent)))
++        .min(TRANSIENT_RETRY_BACKOFF_MAX_MS);
++    let delay = Duration::from_millis(backoff_ms);
++    if let Some(token) = cancellation_token {
++        tokio::select! {
++            () = token.cancelled() => return Err(ToolLoopCancelled.into()),
++            () = sleep(delay) => {}
++        }
++    } else {
++        sleep(delay).await;
++    }
++    Ok(())
++}
++
++fn finalize_error(reason: &str, first_error: Option<&str>) -> (String, Option<String>) {
++    let root = first_error.unwrap_or(reason);
++    if root != reason {
++        (
++            format!("Error: {reason} (root error: {root})"),
++            Some(root.to_string()),
++        )
++    } else {
++        (format!("Error: {reason}"), Some(root.to_string()))
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use crate::observability::NoopObserver;
++    use crate::tools::{Tool, ToolResult};
++    use async_trait::async_trait;
++    use std::sync::{Arc, Mutex};
++    use std::sync::atomic::{AtomicUsize, Ordering};
++
++    struct FlakyTool {
++        name: String,
++        invocations: Arc<AtomicUsize>,
++        plan: Arc<Mutex<Vec<Result<ToolResult, anyhow::Error>>>>,
++    }
++
++    impl FlakyTool {
++        fn new(
++            name: &str,
++            plan: Vec<Result<ToolResult, anyhow::Error>>,
++            invocations: Arc<AtomicUsize>,
++        ) -> Self {
++            Self {
++                name: name.to_string(),
++                invocations,
++                plan: Arc::new(Mutex::new(plan)),
++            }
++        }
++    }
++
++    #[async_trait]
++    impl Tool for FlakyTool {
++        fn name(&self) -> &str {
++            &self.name
++        }
++
++        fn description(&self) -> &str {
++            "flaky tool for retry tests"
++        }
++
++        fn parameters_schema(&self) -> serde_json::Value {
++            serde_json::json!({"type": "object"})
++        }
++
++        async fn execute(&self, _args: serde_json::Value) -> anyhow::Result<ToolResult> {
++            self.invocations.fetch_add(1, Ordering::SeqCst);
++            let mut plan = self.plan.lock().expect("plan lock");
++            plan.remove(0)
++        }
++    }
++
++    #[tokio::test]
++    async fn execute_one_tool_retries_transient_failures() {
++        let invocations = Arc::new(AtomicUsize::new(0));
++        let tool = FlakyTool::new(
++            "flaky",
++            vec![
++                Ok(ToolResult {
++                    success: false,
++                    output: String::new(),
++                    error: Some("timeout waiting for response".to_string()),
++                }),
++                Ok(ToolResult {
++                    success: false,
++                    output: String::new(),
++                    error: Some("connection reset".to_string()),
++                }),
++                Ok(ToolResult {
++                    success: true,
++                    output: "ok".to_string(),
++                    error: None,
++                }),
++            ],
++            Arc::clone(&invocations),
++        );
++        let tools_registry: Vec<Box<dyn Tool>> = vec![Box::new(tool)];
++        let observer = NoopObserver;
++
++        let outcome = execute_one_tool(
++            "flaky",
++            serde_json::json!({}),
++            &tools_registry,
++            &observer,
++            None,
++        )
++        .await
++        .expect("tool execution should succeed after retries");
++
++        assert!(outcome.success);
++        assert_eq!(outcome.output, "ok");
++        assert_eq!(invocations.load(Ordering::SeqCst), 3);
++    }
++
++    #[tokio::test]
++    async fn execute_one_tool_does_not_retry_non_transient_errors() {
++        let invocations = Arc::new(AtomicUsize::new(0));
++        let tool = FlakyTool::new(
++            "non_transient",
++            vec![Ok(ToolResult {
++                success: false,
++                output: String::new(),
++                error: Some("invalid arguments".to_string()),
++            })],
++            Arc::clone(&invocations),
++        );
++        let tools_registry: Vec<Box<dyn Tool>> = vec![Box::new(tool)];
++        let observer = NoopObserver;
++
++        let outcome = execute_one_tool(
++            "non_transient",
++            serde_json::json!({}),
++            &tools_registry,
++            &observer,
++            None,
++        )
++        .await
++        .expect("tool execution should complete");
++
++        assert!(!outcome.success);
++        assert!(outcome.output.contains("invalid arguments"));
++        assert_eq!(invocations.load(Ordering::SeqCst), 1);
++    }
++
++    #[tokio::test]
++    async fn execute_one_tool_preserves_root_error() {
++        let invocations = Arc::new(AtomicUsize::new(0));
++        let tool = FlakyTool::new(
++            "always_fail",
++            vec![
++                Ok(ToolResult {
++                    success: false,
++                    output: String::new(),
++                    error: Some("timeout waiting for response".to_string()),
++                }),
++                Ok(ToolResult {
++                    success: false,
++                    output: String::new(),
++                    error: Some("connection reset".to_string()),
++                }),
++                Ok(ToolResult {
++                    success: false,
++                    output: String::new(),
++                    error: Some("connection reset".to_string()),
++                }),
++            ],
++            Arc::clone(&invocations),
++        );
++        let tools_registry: Vec<Box<dyn Tool>> = vec![Box::new(tool)];
++        let observer = NoopObserver;
++
++        let outcome = execute_one_tool(
++            "always_fail",
++            serde_json::json!({}),
++            &tools_registry,
++            &observer,
++            None,
++        )
++        .await
++        .expect("tool execution should return failure outcome");
++
++        assert!(!outcome.success);
++        let root = outcome.error_reason.unwrap_or_default();
++        assert!(root.contains("timeout"), "root error should be preserved: {root}");
++        assert!(outcome.output.contains("root error"));
++        assert_eq!(invocations.load(Ordering::SeqCst), 3);
++    }
++}
++
+ pub(super) fn should_execute_tools_in_parallel(
+     tool_calls: &[ParsedToolCall],
+     approval: Option<&ApprovalManager>,
+-- 
+2.52.0
+

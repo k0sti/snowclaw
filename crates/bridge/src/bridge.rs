@@ -1,20 +1,20 @@
-use anyhow::{Result, Context};
+use anyhow::{Context, Result};
+use nostr_sdk::{EventId, Keys, PublicKey};
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use std::collections::HashSet;
 use tokio::sync::{broadcast, mpsc, RwLock};
 use tokio::time::interval;
-use tracing::{info, warn, error, debug};
-use nostr_sdk::{EventId, PublicKey, Keys};
+use tracing::{debug, error, info, warn};
 
+use crate::cache::{CacheStats, EventCache};
 use crate::config::{Config, RespondMode};
-use crate::cache::{EventCache, CacheStats};
 use crate::profiles::ProfileCache;
 use crate::relay::{RelayClient, RelayEvent};
 use crate::webhook::WebhookDeliverer;
 use nostr_core::{
-    ConversationRingBuffer, MessageEntry, detect_mentions, mentions_pubkey,
-    sanitize_content_preview,
+    detect_mentions, mentions_pubkey, sanitize_content_preview, ConversationRingBuffer,
+    MessageEntry,
 };
 
 pub struct BridgeState {
@@ -34,12 +34,14 @@ pub struct Bridge {
 
 impl Bridge {
     pub async fn new(config: Config, keys: Keys) -> Result<Self> {
-        let cache = EventCache::new(&config.cache.db_path).await
+        let cache = EventCache::new(&config.cache.db_path)
+            .await
             .with_context(|| "Failed to initialize event cache")?;
 
         let profiles = Arc::new(ProfileCache::new());
 
-        let relay = RelayClient::new(&config.relay.url, keys).await
+        let relay = RelayClient::new(&config.relay.url, keys)
+            .await
             .with_context(|| "Failed to create relay client")?;
 
         let webhook = WebhookDeliverer::new(
@@ -70,20 +72,29 @@ impl Bridge {
         // Connect to relay
         {
             let mut relay = self.state.relay.write().await;
-            relay.connect().await
+            relay
+                .connect()
+                .await
                 .with_context(|| "Failed to connect to relay")?;
 
             if !self.state.config.groups.subscribe.is_empty() {
-                relay.subscribe_groups(&self.state.config.groups.subscribe).await
+                relay
+                    .subscribe_groups(&self.state.config.groups.subscribe)
+                    .await
                     .with_context(|| "Failed to subscribe to groups")?;
             }
 
-            relay.subscribe_dms().await
+            relay
+                .subscribe_dms()
+                .await
                 .with_context(|| "Failed to subscribe to DMs")?;
         }
 
         // Test webhook connectivity
-        self.state.webhook.test_webhook().await
+        self.state
+            .webhook
+            .test_webhook()
+            .await
             .with_context(|| "Webhook connectivity test failed")?;
 
         // Start event stream
@@ -161,21 +172,25 @@ impl Bridge {
                 }
 
                 // Store event in cache
-                state.cache.store_raw(
-                    &event_id_hex,
-                    &author_hex,
-                    event.created_at.as_secs() as i64,
-                    event.kind.as_u16() as i64,
-                    &serde_json::to_string(&event.tags)?,
-                    &event.content,
-                    &event.sig.to_string(),
-                    Some(&group),
-                ).await?;
+                state
+                    .cache
+                    .store_raw(
+                        &event_id_hex,
+                        &author_hex,
+                        event.created_at.as_secs() as i64,
+                        event.kind.as_u16() as i64,
+                        &serde_json::to_string(&event.tags)?,
+                        &event.content,
+                        &event.sig.to_string(),
+                        Some(&group),
+                    )
+                    .await?;
 
                 let author_name = state.profiles.get_display_name_hex(&author_hex).await;
 
                 // Phase 1: Content sanitization
-                let preview = sanitize_content_preview(&event.content, state.config.webhook.preview_length);
+                let preview =
+                    sanitize_content_preview(&event.content, state.config.webhook.preview_length);
 
                 // Phase 1: Mention detection
                 let known_pubkeys = state.profiles.get_known_pubkeys().await;
@@ -192,7 +207,7 @@ impl Bridge {
                         let our_pubkey = relay.our_pubkey().to_hex();
                         drop(relay);
                         mentions_pubkey(&detected_mentions, &our_pubkey)
-                    },
+                    }
                 };
 
                 // Phase 1: Add to ring buffer for conversation context
@@ -214,17 +229,33 @@ impl Bridge {
                         Some(detected_mentions)
                     };
 
-                    state.webhook.deliver_group_message_enhanced(
-                        &event_id_hex, &group, &author_name, &preview, 
-                        event.created_at.as_secs() as i64,
-                        Some(context),
-                        mentions,
-                    ).await?;
+                    state
+                        .webhook
+                        .deliver_group_message_enhanced(
+                            &event_id_hex,
+                            &group,
+                            &author_name,
+                            &preview,
+                            event.created_at.as_secs() as i64,
+                            Some(context),
+                            mentions,
+                        )
+                        .await?;
 
-                    info!("#{} {} : {}", group, author_name, &preview[..preview.len().min(60)]);
+                    info!(
+                        "#{} {} : {}",
+                        group,
+                        author_name,
+                        &preview[..preview.len().min(60)]
+                    );
                 } else {
-                    debug!("#{} {} : {} (filtered by respond_mode: {})", 
-                           group, author_name, &preview[..preview.len().min(60)], respond_mode);
+                    debug!(
+                        "#{} {} : {} (filtered by respond_mode: {})",
+                        group,
+                        author_name,
+                        &preview[..preview.len().min(60)],
+                        respond_mode
+                    );
                 }
             }
             RelayEvent::DirectMessage { event } => {
@@ -236,21 +267,25 @@ impl Bridge {
                 }
 
                 // Store event in cache
-                state.cache.store_raw(
-                    &event_id_hex,
-                    &author_hex,
-                    event.created_at.as_secs() as i64,
-                    event.kind.as_u16() as i64,
-                    &serde_json::to_string(&event.tags)?,
-                    &event.content,
-                    &event.sig.to_string(),
-                    None,
-                ).await?;
+                state
+                    .cache
+                    .store_raw(
+                        &event_id_hex,
+                        &author_hex,
+                        event.created_at.as_secs() as i64,
+                        event.kind.as_u16() as i64,
+                        &serde_json::to_string(&event.tags)?,
+                        &event.content,
+                        &event.sig.to_string(),
+                        None,
+                    )
+                    .await?;
 
                 let author_name = state.profiles.get_display_name_hex(&author_hex).await;
 
                 // Phase 1: Content sanitization
-                let preview = sanitize_content_preview(&event.content, state.config.webhook.preview_length);
+                let preview =
+                    sanitize_content_preview(&event.content, state.config.webhook.preview_length);
 
                 // Phase 1: Mention detection
                 let known_pubkeys = state.profiles.get_known_pubkeys().await;
@@ -262,17 +297,30 @@ impl Bridge {
                 };
 
                 // DMs are always delivered (no respond mode filtering)
-                state.webhook.deliver_dm_enhanced(
-                    &event_id_hex, &author_name, &preview,
-                    event.created_at.as_secs() as i64,
-                    mentions,
-                ).await?;
+                state
+                    .webhook
+                    .deliver_dm_enhanced(
+                        &event_id_hex,
+                        &author_name,
+                        &preview,
+                        event.created_at.as_secs() as i64,
+                        mentions,
+                    )
+                    .await?;
 
-                info!("DM from {}: {}", author_name, &preview[..preview.len().min(60)]);
+                info!(
+                    "DM from {}: {}",
+                    author_name,
+                    &preview[..preview.len().min(60)]
+                );
             }
             RelayEvent::ProfileUpdate { event } => {
                 let author_hex = event.pubkey.to_hex();
-                if let Err(e) = state.profiles.store_profile_raw(&author_hex, &event.content).await {
+                if let Err(e) = state
+                    .profiles
+                    .store_profile_raw(&author_hex, &event.content)
+                    .await
+                {
                     warn!("Failed to store profile for {}: {}", &author_hex[..8], e);
                 }
             }
@@ -280,10 +328,7 @@ impl Bridge {
         Ok(())
     }
 
-    async fn maintenance_loop(
-        state: Arc<BridgeState>,
-        shutdown_rx: &mut broadcast::Receiver<()>,
-    ) {
+    async fn maintenance_loop(state: Arc<BridgeState>, shutdown_rx: &mut broadcast::Receiver<()>) {
         let mut cleanup_interval = interval(Duration::from_secs(3600));
         loop {
             tokio::select! {
@@ -308,13 +353,21 @@ impl BridgeState {
         relay.send_group_message(group, content).await
     }
 
-    pub async fn send_direct_message(&self, recipient: &PublicKey, content: &str) -> Result<EventId> {
+    pub async fn send_direct_message(
+        &self,
+        recipient: &PublicKey,
+        content: &str,
+    ) -> Result<EventId> {
         let relay = self.relay.read().await;
         relay.send_dm(recipient, content).await
     }
 
     pub async fn query_events(
-        &self, group: Option<&str>, author: Option<&PublicKey>, since: Option<i64>, limit: Option<i64>,
+        &self,
+        group: Option<&str>,
+        author: Option<&PublicKey>,
+        since: Option<i64>,
+        limit: Option<i64>,
     ) -> Result<Vec<crate::cache::CachedEvent>> {
         self.cache.query(group, author, since, limit).await
     }
@@ -332,7 +385,9 @@ impl BridgeState {
         Ok("[encrypted]".to_string())
     }
 
-    pub async fn get_stats(&self) -> Result<(CacheStats, Duration, bool, HashSet<String>, PublicKey)> {
+    pub async fn get_stats(
+        &self,
+    ) -> Result<(CacheStats, Duration, bool, HashSet<String>, PublicKey)> {
         let cache_stats = self.cache.stats().await?;
         let uptime = self.start_time.elapsed();
         let relay = self.relay.read().await;

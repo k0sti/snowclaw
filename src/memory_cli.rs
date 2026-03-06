@@ -54,23 +54,21 @@ pub async fn handle_command(cmd: MemoryCommands, config: &Config) -> Result<()> 
     let mem = memory::create_memory(&config.memory, &config.workspace_dir, None)?;
 
     match cmd {
-        MemoryCommands::Show { key } => {
-            match mem.get(&key).await? {
-                Some(entry) => {
-                    println!("Key:      {}", entry.key);
-                    println!("Category: {}", entry.category);
-                    println!("Updated:  {}", entry.timestamp);
-                    if let Some(sid) = &entry.session_id {
-                        println!("Session:  {sid}");
-                    }
-                    println!("---");
-                    println!("{}", entry.content);
+        MemoryCommands::Show { key } => match mem.get(&key).await? {
+            Some(entry) => {
+                println!("Key:      {}", entry.key);
+                println!("Category: {}", entry.category);
+                println!("Updated:  {}", entry.timestamp);
+                if let Some(sid) = &entry.session_id {
+                    println!("Session:  {sid}");
                 }
-                None => {
-                    println!("No memory found for key: {key}");
-                }
+                println!("---");
+                println!("{}", entry.content);
             }
-        }
+            None => {
+                println!("No memory found for key: {key}");
+            }
+        },
 
         MemoryCommands::List { category } => {
             let cat = category.as_deref().map(parse_category);

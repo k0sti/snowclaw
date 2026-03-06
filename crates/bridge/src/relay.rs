@@ -1,13 +1,12 @@
+use anyhow::{Context, Result};
 use nostr_sdk::{
-    Client, Event, EventId, Filter, Keys, Kind, PublicKey, RelayUrl, Tag, TagKind,
-    EventBuilder, Alphabet, SingleLetterTag,
-    RelayPoolNotification,
+    Alphabet, Client, Event, EventBuilder, EventId, Filter, Keys, Kind, PublicKey,
+    RelayPoolNotification, RelayUrl, SingleLetterTag, Tag, TagKind,
 };
-use anyhow::{Result, Context};
 use std::collections::HashSet;
 use std::str::FromStr;
 use tokio::sync::mpsc;
-use tracing::{info, debug, warn, error};
+use tracing::{debug, error, info, warn};
 
 pub struct RelayClient {
     client: Client,
@@ -45,9 +44,11 @@ impl RelayClient {
     pub async fn connect(&mut self) -> Result<()> {
         let url = RelayUrl::from_str(&self.relay_url)
             .with_context(|| format!("Invalid relay URL: {}", self.relay_url))?;
-        self.client.add_relay(url).await
+        self.client
+            .add_relay(url)
+            .await
             .with_context(|| "Failed to add relay")?;
-        
+
         info!("Connecting to {}...", self.relay_url);
         self.client.connect().await;
         tokio::time::sleep(std::time::Duration::from_secs(3)).await;
@@ -56,16 +57,23 @@ impl RelayClient {
     }
 
     pub async fn subscribe_groups(&mut self, groups: &[String]) -> Result<()> {
-        if groups.is_empty() { return Ok(()); }
+        if groups.is_empty() {
+            return Ok(());
+        }
         info!("Subscribing to groups: {:?}", groups);
 
         let since = nostr_sdk::Timestamp::now() - 3600u64;
         let filter = Filter::new()
             .kind(Kind::Custom(9))
-            .custom_tags(SingleLetterTag::lowercase(Alphabet::H), groups.iter().map(|s| s.as_str()))
+            .custom_tags(
+                SingleLetterTag::lowercase(Alphabet::H),
+                groups.iter().map(|s| s.as_str()),
+            )
             .since(since);
 
-        self.client.subscribe(filter, None).await
+        self.client
+            .subscribe(filter, None)
+            .await
             .with_context(|| "Failed to subscribe to groups")?;
 
         for g in groups {
@@ -83,7 +91,9 @@ impl RelayClient {
             .pubkey(self.our_pubkey)
             .since(since);
 
-        self.client.subscribe(filter, None).await
+        self.client
+            .subscribe(filter, None)
+            .await
             .with_context(|| "Failed to subscribe to DMs")?;
         info!("Subscribed to DMs");
         Ok(())
@@ -107,27 +117,30 @@ impl RelayClient {
                         let kind_num = event.kind.as_u16();
                         let relay_event = match kind_num {
                             9 => {
-                                let group = event.tags.iter()
+                                let group = event
+                                    .tags
+                                    .iter()
                                     .find(|t| t.kind() == TagKind::h())
                                     .and_then(|t| t.content())
                                     .map(|s| s.to_string())
                                     .unwrap_or_else(|| "unknown".to_string());
-                                
+
                                 info!("Event: #{} from {}", group, &event.pubkey.to_hex()[..8]);
-                                Some(RelayEvent::GroupMessage { 
-                                    event: event.as_ref().clone(), group 
+                                Some(RelayEvent::GroupMessage {
+                                    event: event.as_ref().clone(),
+                                    group,
                                 })
                             }
                             4 => {
                                 info!("Event: DM from {}", &event.pubkey.to_hex()[..8]);
-                                Some(RelayEvent::DirectMessage { 
-                                    event: event.as_ref().clone() 
+                                Some(RelayEvent::DirectMessage {
+                                    event: event.as_ref().clone(),
                                 })
                             }
                             0 => {
                                 debug!("Event: profile from {}", &event.pubkey.to_hex()[..8]);
-                                Some(RelayEvent::ProfileUpdate { 
-                                    event: event.as_ref().clone() 
+                                Some(RelayEvent::ProfileUpdate {
+                                    event: event.as_ref().clone(),
                                 })
                             }
                             _ => None,
@@ -154,14 +167,20 @@ impl RelayClient {
         let builder = EventBuilder::new(Kind::Custom(9), content)
             .tag(Tag::custom(TagKind::h(), vec![group.to_string()]));
 
-        let output = self.client.send_event_builder(builder).await
+        let output = self
+            .client
+            .send_event_builder(builder)
+            .await
             .map_err(|e| anyhow::anyhow!("Failed to send group message: {}", e))?;
 
         Ok(output.val)
     }
 
     pub async fn send_dm(&self, recipient: &PublicKey, content: &str) -> Result<EventId> {
-        let output = self.client.send_private_msg(*recipient, content, None).await
+        let output = self
+            .client
+            .send_private_msg(*recipient, content, None)
+            .await
             .map_err(|e| anyhow::anyhow!("Failed to send DM: {}", e))?;
         Ok(output.val)
     }

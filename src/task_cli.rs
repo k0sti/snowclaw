@@ -90,8 +90,7 @@ pub fn status_to_kind(status: &str) -> Result<u16> {
 
 /// Extract the numeric part from a SNOW-N task ID.
 fn parse_snow_number(id: &str) -> Option<u64> {
-    id.strip_prefix("SNOW-")
-        .and_then(|n| n.parse::<u64>().ok())
+    id.strip_prefix("SNOW-").and_then(|n| n.parse::<u64>().ok())
 }
 
 /// Derive the next SNOW-N number from existing tasks.
@@ -124,10 +123,7 @@ fn normalize_task_id(input: &str) -> String {
 }
 
 /// Find a task by normalized ID.
-fn find_task<'a>(
-    tasks: &'a [serde_json::Value],
-    id: &str,
-) -> Option<&'a serde_json::Value> {
+fn find_task<'a>(tasks: &'a [serde_json::Value], id: &str) -> Option<&'a serde_json::Value> {
     let normalized = normalize_task_id(id);
     tasks
         .iter()
@@ -247,18 +243,14 @@ pub fn handle_command(cmd: TaskCommands, config: &Config) -> Result<()> {
                         if !history.is_empty() {
                             println!("  History:");
                             for entry in history {
-                                let st = entry
-                                    .get("status")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("?");
+                                let st =
+                                    entry.get("status").and_then(|v| v.as_str()).unwrap_or("?");
                                 let ts = entry
                                     .get("timestamp")
                                     .and_then(|v| v.as_str())
                                     .unwrap_or("?");
-                                let detail = entry
-                                    .get("detail")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("");
+                                let detail =
+                                    entry.get("detail").and_then(|v| v.as_str()).unwrap_or("");
                                 if detail.is_empty() {
                                     println!("    {ts}: {st}");
                                 } else {
@@ -277,11 +269,7 @@ pub fn handle_command(cmd: TaskCommands, config: &Config) -> Result<()> {
             }
         }
 
-        TaskCommands::Update {
-            id,
-            status,
-            detail,
-        } => {
+        TaskCommands::Update { id, status, detail } => {
             let kind = status_to_kind(&status)?;
             let mut tasks = load_tasks(config)?;
             let now = chrono::Utc::now().to_rfc3339();
@@ -319,4 +307,3 @@ pub fn handle_command(cmd: TaskCommands, config: &Config) -> Result<()> {
         }
     }
 }
-

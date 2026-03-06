@@ -416,6 +416,12 @@ pub enum MemoryCommands {
         #[arg(long, default_value = "true")]
         progress: bool,
     },
+    /// Migrate legacy SQLite memories to Nomen (kind 31234)
+    MigrateToNomen {
+        /// Preview what would be migrated without writing anything
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 /// Integration subcommands

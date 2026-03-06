@@ -1,7 +1,7 @@
 use super::traits::{Memory, MemoryCategory};
 use super::{
-    classify_memory_backend, create_memory_for_migration, effective_memory_backend_name,
-    MemoryBackendKind,
+    classify_memory_backend, create_memory, create_memory_for_migration,
+    effective_memory_backend_name, MemoryBackendKind,
 };
 use crate::config::Config;
 #[cfg(feature = "memory-postgres")]
@@ -25,6 +25,9 @@ pub async fn handle_command(command: crate::MemoryCommands, config: &Config) -> 
         }
         crate::MemoryCommands::Reindex { yes, progress } => {
             handle_reindex(config, yes, progress).await
+        }
+        crate::MemoryCommands::MigrateToNomen { .. } => {
+            anyhow::bail!("migrate-to-nomen has been removed (nomen embedded backend removed)")
         }
     }
 }
@@ -75,6 +78,11 @@ fn create_cli_memory(config: &Config) -> Result<Box<dyn Memory>> {
         MemoryBackendKind::Postgres => {
             bail!("memory backend 'postgres' requires the 'memory-postgres' feature to be enabled");
         }
+        MemoryBackendKind::Nomen => create_memory(
+            &config.memory,
+            &config.workspace_dir,
+            config.memory.embedding_api_key.as_deref(),
+        ),
         _ => create_memory_for_migration(&backend, &config.workspace_dir),
     }
 }
@@ -378,6 +386,8 @@ fn parse_category(s: &str) -> MemoryCategory {
         other => MemoryCategory::Custom(other.to_string()),
     }
 }
+
+
 
 fn truncate_content(s: &str, max_len: usize) -> String {
     let line = s.lines().next().unwrap_or(s);

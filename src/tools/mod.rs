@@ -15,6 +15,7 @@
 //! To add a new tool, implement [`Tool`] in a new submodule and register it in
 //! [`all_tools_with_runtime`]. See `AGENTS.md` §7.3 for the full change playbook.
 
+pub mod agent_lesson;
 pub mod agent_load_tracker;
 pub mod agent_selection;
 pub mod agents_ipc;
@@ -60,6 +61,7 @@ pub mod memory_observe;
 pub mod memory_recall;
 pub mod memory_store;
 pub mod model_routing_config;
+pub mod nostr_tasks;
 pub mod openclaw_migration;
 pub mod orchestration_settings;
 pub mod pdf_read;
@@ -72,13 +74,13 @@ pub mod schedule;
 pub mod schema;
 pub mod screenshot;
 pub mod shell;
+mod snowclaw_tools;
+pub mod social_search;
 pub mod subagent_list;
 pub mod subagent_manage;
 pub mod subagent_registry;
 pub mod subagent_spawn;
 pub mod task_plan;
-pub mod agent_lesson;
-pub mod social_search;
 pub mod traits;
 pub mod url_validation;
 pub mod wasm_module;
@@ -88,9 +90,8 @@ pub mod web_fetch;
 pub mod web_search_config;
 pub mod web_search_tool;
 pub mod xlsx_read;
-pub mod nostr_tasks;
-mod snowclaw_tools;
 
+pub use agent_lesson::AgentLessonTool;
 pub use agent_load_tracker::AgentLoadTracker;
 pub use apply_patch::ApplyPatchTool;
 #[allow(unused_imports)]
@@ -133,6 +134,7 @@ pub use memory_observe::MemoryObserveTool;
 pub use memory_recall::MemoryRecallTool;
 pub use memory_store::MemoryStoreTool;
 pub use model_routing_config::ModelRoutingConfigTool;
+pub use nostr_tasks::NostrTaskTool;
 pub use openclaw_migration::OpenClawMigrationTool;
 pub use pdf_read::PdfReadTool;
 pub use pptx_read::PptxReadTool;
@@ -144,6 +146,7 @@ pub use schedule::ScheduleTool;
 pub use schema::{CleaningStrategy, SchemaCleanr};
 pub use screenshot::ScreenshotTool;
 pub use shell::ShellTool;
+pub use social_search::SocialSearchTool;
 pub use subagent_list::SubAgentListTool;
 pub use subagent_manage::SubAgentManageTool;
 pub use subagent_registry::SubAgentRegistry;
@@ -158,9 +161,6 @@ pub use web_fetch::WebFetchTool;
 pub use web_search_config::WebSearchConfigTool;
 pub use web_search_tool::WebSearchTool;
 pub use xlsx_read::XlsxReadTool;
-pub use agent_lesson::AgentLessonTool;
-pub use nostr_tasks::NostrTaskTool;
-pub use social_search::SocialSearchTool;
 
 pub use auth_profile::ManageAuthProfileTool;
 pub use quota_tools::{CheckProviderQuotaTool, EstimateQuotaCostTool, SwitchProviderTool};

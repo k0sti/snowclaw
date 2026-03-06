@@ -263,10 +263,7 @@ mod tests {
         }
 
         let tool = SocialSearchTool { conn: Some(conn) };
-        let result = tool
-            .execute(json!({"query": "async Rust"}))
-            .await
-            .unwrap();
+        let result = tool.execute(json!({"query": "async Rust"})).await.unwrap();
         assert!(result.success);
         assert!(result.output.contains("async"));
         assert!(result.output.contains("message"));

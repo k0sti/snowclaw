@@ -4507,6 +4507,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "nomen-wire"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "futures-util",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
 name = "nostr"
 version = "0.44.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9742,6 +9756,7 @@ dependencies = [
  "matrix-sdk",
  "mime_guess",
  "nanohtml2text",
+ "nomen-wire",
  "nostr-core",
  "nostr-sdk",
  "nusb",

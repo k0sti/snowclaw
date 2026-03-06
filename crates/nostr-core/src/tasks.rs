@@ -27,20 +27,26 @@ pub fn build_task_metadata(
     is_owner: bool,
 ) -> std::collections::HashMap<String, String> {
     let mut meta = std::collections::HashMap::new();
-    
+
     meta.insert("nostr_event_id".to_string(), event.id.to_hex());
     meta.insert("nostr_pubkey".to_string(), event.pubkey.to_hex());
     meta.insert("nostr_kind".to_string(), event.kind.as_u16().to_string());
-    meta.insert("nostr_timestamp".to_string(), event.created_at.as_secs().to_string());
-    meta.insert("nostr_task_status".to_string(), status_name_for_kind(event.kind.as_u16()).to_string());
-    
+    meta.insert(
+        "nostr_timestamp".to_string(),
+        event.created_at.as_secs().to_string(),
+    );
+    meta.insert(
+        "nostr_task_status".to_string(),
+        status_name_for_kind(event.kind.as_u16()).to_string(),
+    );
+
     if let Some(g) = group {
         meta.insert("nostr_group".to_string(), g.to_string());
     }
     if is_owner {
         meta.insert("nostr_is_owner".to_string(), "true".to_string());
     }
-    
+
     // Extract task reference from event tags
     for tag in event.tags.iter() {
         let s = tag.as_slice();
@@ -51,7 +57,7 @@ pub fn build_task_metadata(
             }
         }
     }
-    
+
     meta
 }
 
@@ -82,12 +88,15 @@ mod tests {
     fn build_task_metadata_includes_fields() {
         let keys = Keys::generate();
         let event = EventBuilder::new(Kind::Custom(1631), "task completed")
-            .tag(Tag::custom(TagKind::custom("e"), vec!["task123".to_string()]))
+            .tag(Tag::custom(
+                TagKind::custom("e"),
+                vec!["task123".to_string()],
+            ))
             .sign_with_keys(&keys)
             .unwrap();
 
         let meta = build_task_metadata(&event, Some("techteam"), true);
-        
+
         assert_eq!(meta.get("nostr_kind").unwrap(), "1631");
         assert_eq!(meta.get("nostr_task_status").unwrap(), "Done");
         assert_eq!(meta.get("nostr_group").unwrap(), "techteam");

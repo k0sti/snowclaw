@@ -1,7 +1,7 @@
 // TODO: Refactor this file to use nostr-core instead of inline implementations
 // The nostr-core crate now contains extracted versions of:
 // - KeyFilter, RespondMode, HistoryMessage, GroupConfig, DynamicConfig
-// - NostrMemory, ProfileMetadata, NpubMemory, GroupMemory 
+// - NostrMemory, ProfileMetadata, NpubMemory, GroupMemory
 // - RelayClient wrapper, mention detection, context formatting
 // - Action protocol parsing, task status handling
 
@@ -349,10 +349,10 @@ impl NostrChannel {
             .kinds(vec![Kind::Custom(9), Kind::Custom(11), Kind::Custom(12)])
             .limit(self.config.context_history);
 
-        let fetch_result = self.client.fetch_events(
-            filter,
-            Duration::from_secs(5),
-        ).await;
+        let fetch_result = self
+            .client
+            .fetch_events(filter, Duration::from_secs(5))
+            .await;
 
         match fetch_result {
             Ok(events) => {
@@ -373,7 +373,10 @@ impl NostrChannel {
                     };
 
                     let sender_name = self.resolve_name(&event.pubkey).await;
-                    let sender_npub = event.pubkey.to_bech32().unwrap_or_else(|_| event.pubkey.to_hex());
+                    let sender_npub = event
+                        .pubkey
+                        .to_bech32()
+                        .unwrap_or_else(|_| event.pubkey.to_hex());
                     let is_owner = self.is_from_owner(&event);
 
                     // Cache backfilled events for dedup against live subscription
@@ -388,7 +391,8 @@ impl NostrChannel {
                             event_id: event.id.to_hex(),
                             is_owner,
                         },
-                    ).await;
+                    )
+                    .await;
                     count += 1;
                 }
                 if count > 0 {
@@ -407,18 +411,16 @@ impl NostrChannel {
             return;
         }
 
-        let since = Timestamp::from(
-            Timestamp::now().as_secs().saturating_sub(2 * 86400),
-        );
+        let since = Timestamp::from(Timestamp::now().as_secs().saturating_sub(2 * 86400));
         let filter = Filter::new()
             .kind(Kind::GiftWrap)
             .pubkey(self.config.keys.public_key())
             .since(since);
 
-        let fetch_result = self.client.fetch_events(
-            filter,
-            Duration::from_secs(10),
-        ).await;
+        let fetch_result = self
+            .client
+            .fetch_events(filter, Duration::from_secs(10))
+            .await;
 
         match fetch_result {
             Ok(events) => {
@@ -433,7 +435,10 @@ impl NostrChannel {
                     for event in events.iter() {
                         self.cache_event(event).await;
                     }
-                    info!("Backfilled {} DM event IDs as seen (no reprocessing)", count);
+                    info!(
+                        "Backfilled {} DM event IDs as seen (no reprocessing)",
+                        count
+                    );
                 }
             }
             Err(e) => warn!("Failed to backfill DM events: {e}"),
@@ -447,9 +452,7 @@ impl NostrChannel {
             None => return,
         };
 
-        let filter = Filter::new()
-            .kind(Kind::Custom(30078))
-            .author(owner);
+        let filter = Filter::new().kind(Kind::Custom(30078)).author(owner);
 
         match tokio::time::timeout(
             Duration::from_secs(5),
@@ -548,7 +551,9 @@ impl NostrChannel {
     async fn push_history(&self, group: &str, msg: HistoryMessage) {
         let max = self.effective_context_history(group).await;
         let mut history = self.group_history.write().await;
-        let buf = history.entry(group.to_string()).or_insert_with(VecDeque::new);
+        let buf = history
+            .entry(group.to_string())
+            .or_insert_with(VecDeque::new);
         buf.push_back(msg);
         while buf.len() > max {
             buf.pop_front();
@@ -593,7 +598,10 @@ impl NostrChannel {
             }
             let short_npub = Self::truncate_npub(&msg.npub);
             let role = if msg.is_owner { " role=owner" } else { "" };
-            ctx.push_str(&format!("<{} npub={}{}>  {}\n", msg.sender, short_npub, role, msg.content));
+            ctx.push_str(&format!(
+                "<{} npub={}{}>  {}\n",
+                msg.sender, short_npub, role, msg.content
+            ));
         }
         if ctx == "[Recent conversation context]\n" {
             return String::new(); // no history besides current message
@@ -620,13 +628,22 @@ impl NostrChannel {
     }
 
     /// Build compact header for group messages.
-    fn compact_group_header(group: &str, sender: &str, npub: &str, kind: u16, event_id: &str, is_owner: bool) -> String {
+    fn compact_group_header(
+        group: &str,
+        sender: &str,
+        npub: &str,
+        kind: u16,
+        event_id: &str,
+        is_owner: bool,
+    ) -> String {
         let short_id = &event_id[..8.min(event_id.len())];
         let short_npub = Self::truncate_npub(npub);
         if is_owner {
             format!("[nostr:group=#{group} from={sender} npub={short_npub} role=owner kind={kind} id={short_id}]")
         } else {
-            format!("[nostr:group=#{group} from={sender} npub={short_npub} kind={kind} id={short_id}]")
+            format!(
+                "[nostr:group=#{group} from={sender} npub={short_npub} kind={kind} id={short_id}]"
+            )
         }
     }
 
@@ -642,7 +659,11 @@ impl NostrChannel {
     }
 
     /// Build metadata HashMap for a Nostr event.
-    fn build_metadata(event: &Event, group: Option<&str>, is_owner: bool) -> Option<HashMap<String, String>> {
+    fn build_metadata(
+        event: &Event,
+        group: Option<&str>,
+        is_owner: bool,
+    ) -> Option<HashMap<String, String>> {
         let mut meta = HashMap::new();
         meta.insert("nostr_event_id".into(), event.id.to_hex());
         meta.insert("nostr_pubkey".into(), event.pubkey.to_hex());
@@ -682,19 +703,39 @@ impl NostrChannel {
                     serde_json::from_str::<serde_json::Value>(&event.content).ok()
                 }) {
                     Some(meta) => {
-                        let display_name = meta.get("display_name").and_then(|v| v.as_str()).map(|s| s.to_string());
-                        let name_field = meta.get("name").and_then(|v| v.as_str()).map(|s| s.to_string());
-                        let about = meta.get("about").and_then(|v| v.as_str()).map(|s| s.to_string());
-                        let picture = meta.get("picture").and_then(|v| v.as_str()).map(|s| s.to_string());
-                        let nip05 = meta.get("nip05").and_then(|v| v.as_str()).map(|s| s.to_string());
-                        let lud16 = meta.get("lud16").and_then(|v| v.as_str()).map(|s| s.to_string());
+                        let display_name = meta
+                            .get("display_name")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string());
+                        let name_field = meta
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string());
+                        let about = meta
+                            .get("about")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string());
+                        let picture = meta
+                            .get("picture")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string());
+                        let nip05 = meta
+                            .get("nip05")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string());
+                        let lud16 = meta
+                            .get("lud16")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string());
 
-                        let resolved = display_name.clone()
-                            .or(name_field.clone())
-                            .unwrap_or_else(|| {
-                                let npub = pubkey.to_bech32().unwrap_or_default();
-                                format!("{}...{}", &npub[..10], &npub[npub.len() - 4..])
-                            });
+                        let resolved =
+                            display_name
+                                .clone()
+                                .or(name_field.clone())
+                                .unwrap_or_else(|| {
+                                    let npub = pubkey.to_bech32().unwrap_or_default();
+                                    format!("{}...{}", &npub[..10], &npub[npub.len() - 4..])
+                                });
 
                         let profile = super::nostr_memory::ProfileMetadata {
                             name: name_field,
@@ -707,21 +748,36 @@ impl NostrChannel {
                         };
 
                         // Log profile lookup
-                        let npub_short = &pubkey.to_bech32().unwrap_or_default()[..20.min(pubkey.to_bech32().unwrap_or_default().len())];
-                        let about_short = about.as_deref().unwrap_or("").chars().take(50).collect::<String>();
-                        info!("Profile: {} = {} (about: {})", npub_short, resolved, about_short);
+                        let npub_short = &pubkey.to_bech32().unwrap_or_default()
+                            [..20.min(pubkey.to_bech32().unwrap_or_default().len())];
+                        let about_short = about
+                            .as_deref()
+                            .unwrap_or("")
+                            .chars()
+                            .take(50)
+                            .collect::<String>();
+                        info!(
+                            "Profile: {} = {} (about: {})",
+                            npub_short, resolved, about_short
+                        );
 
                         (resolved, Some(profile))
                     }
                     None => {
                         let npub = pubkey.to_bech32().unwrap_or_default();
-                        (format!("{}...{}", &npub[..10], &npub[npub.len() - 4..]), None)
+                        (
+                            format!("{}...{}", &npub[..10], &npub[npub.len() - 4..]),
+                            None,
+                        )
                     }
                 }
             }
             _ => {
                 let npub = pubkey.to_bech32().unwrap_or_default();
-                (format!("{}...{}", &npub[..10], &npub[npub.len() - 4..]), None)
+                (
+                    format!("{}...{}", &npub[..10], &npub[npub.len() - 4..]),
+                    None,
+                )
             }
         };
 
@@ -756,9 +812,7 @@ impl NostrChannel {
             for &kind in &self.config.extra_kinds {
                 kinds.push(Kind::Custom(kind));
             }
-            let group_filter = Filter::new()
-                .kinds(kinds)
-                .since(Timestamp::now());
+            let group_filter = Filter::new().kinds(kinds).since(Timestamp::now());
             filters.push(group_filter);
         }
 
@@ -766,7 +820,8 @@ impl NostrChannel {
         // NIP-17 gift wraps have randomized created_at (±2 days) for privacy,
         // so we look back 2 days to catch them all. Deduplication via event cache.
         if self.config.listen_dms {
-            let two_days_ago = Timestamp::from(Timestamp::now().as_secs().saturating_sub(2 * 24 * 60 * 60));
+            let two_days_ago =
+                Timestamp::from(Timestamp::now().as_secs().saturating_sub(2 * 24 * 60 * 60));
             let dm_filter = Filter::new()
                 .kinds(vec![Kind::GiftWrap, Kind::EncryptedDirectMessage])
                 .pubkey(self.config.keys.public_key())
@@ -798,9 +853,7 @@ impl NostrChannel {
                 .since(Timestamp::now());
             filters.push(config_filter);
 
-            let owner_claims_filter = Filter::new()
-                .kind(Kind::Custom(14199))
-                .author(*owner);
+            let owner_claims_filter = Filter::new().kind(Kind::Custom(14199)).author(*owner);
             filters.push(owner_claims_filter);
         }
 
@@ -896,6 +949,11 @@ impl NostrChannel {
             }
         }
 
+        // Check for @all broadcast mention
+        if content_lower.contains("@all") {
+            return true;
+        }
+
         // Check for npub/hex mention in content
         let our_npub = our_pubkey.to_bech32().unwrap_or_default();
         let our_hex = our_pubkey.to_hex();
@@ -915,18 +973,22 @@ impl NostrChannel {
 
     /// Extract action params from event tags
     fn extract_action_params(event: &Event) -> Vec<(String, String)> {
-        event.tags.iter().filter_map(|tag| {
-            let s = tag.as_slice();
-            if s.first().map(|v| v.as_str()) == Some("param") {
-                match (s.get(1), s.get(2)) {
-                    (Some(k), Some(v)) => Some((k.to_string(), v.to_string())),
-                    (Some(k), None) => Some((k.to_string(), String::new())),
-                    _ => None,
+        event
+            .tags
+            .iter()
+            .filter_map(|tag| {
+                let s = tag.as_slice();
+                if s.first().map(|v| v.as_str()) == Some("param") {
+                    match (s.get(1), s.get(2)) {
+                        (Some(k), Some(v)) => Some((k.to_string(), v.to_string())),
+                        (Some(k), None) => Some((k.to_string(), String::new())),
+                        _ => None,
+                    }
+                } else {
+                    None
                 }
-            } else {
-                None
-            }
-        }).collect()
+            })
+            .collect()
     }
 
     /// Publish a kind 9 group message
@@ -964,7 +1026,10 @@ impl NostrChannel {
                     .send_private_msg(*recipient, content, extra_tags)
                     .await
                     .context("Failed to send NIP-17 DM")?;
-                debug!("Sent NIP-17 DM to {}", recipient.to_bech32().unwrap_or_default());
+                debug!(
+                    "Sent NIP-17 DM to {}",
+                    recipient.to_bech32().unwrap_or_default()
+                );
             }
             NostrProtocol::Nip04 => {
                 let signer = self.client.signer().await.context("No signer on client")?;
@@ -979,7 +1044,10 @@ impl NostrChannel {
                     .send_event_builder(builder)
                     .await
                     .context("Failed to send NIP-04 DM")?;
-                debug!("Sent NIP-04 DM to {}", recipient.to_bech32().unwrap_or_default());
+                debug!(
+                    "Sent NIP-04 DM to {}",
+                    recipient.to_bech32().unwrap_or_default()
+                );
             }
         }
 
@@ -1035,7 +1103,10 @@ impl NostrChannel {
             let builder = EventBuilder::new(Kind::Custom(4129), content.as_str()).tags(tags);
             match self.client.send_event_builder(builder).await {
                 Ok(output) => {
-                    info!("Published agent lesson (id={id}) as kind 4129: {}", output.val);
+                    info!(
+                        "Published agent lesson (id={id}) as kind 4129: {}",
+                        output.val
+                    );
                     let db = conn.lock();
                     if let Err(e) =
                         crate::tools::agent_lesson::mark_published(&db, *id, &output.val.to_hex())
@@ -1094,7 +1165,10 @@ impl NostrChannel {
                 }
                 map.insert(ctx_check.clone(), Instant::now());
             } else {
-                debounce_check.lock().await.insert(ctx_check.clone(), Instant::now());
+                debounce_check
+                    .lock()
+                    .await
+                    .insert(ctx_check.clone(), Instant::now());
             }
 
             if let Err(e) = client.send_event_builder(builder).await {
@@ -1126,7 +1200,10 @@ impl NostrChannel {
             .collect();
         let builder = EventBuilder::new(Kind::Custom(10050), "").tags(msg_relay_tags);
         match self.client.send_event_builder(builder).await {
-            Ok(output) => info!("Published messaging relay list (kind 10050): {}", output.val),
+            Ok(output) => info!(
+                "Published messaging relay list (kind 10050): {}",
+                output.val
+            ),
             Err(e) => warn!("Failed to publish messaging relay list: {e}"),
         }
     }
@@ -1182,7 +1259,11 @@ impl NostrChannel {
             Tag::custom(TagKind::custom("p"), vec![request_event.pubkey.to_hex()]),
             Tag::custom(
                 TagKind::custom("e"),
-                vec![request_event.id.to_hex(), String::new(), "reply".to_string()],
+                vec![
+                    request_event.id.to_hex(),
+                    String::new(),
+                    "reply".to_string(),
+                ],
             ),
             Tag::custom(
                 TagKind::custom("action"),
@@ -1199,7 +1280,10 @@ impl NostrChannel {
             .await
             .context("Failed to publish action response")?;
 
-        info!("Published action response {}.result status={}: {}", action, status, output.val);
+        info!(
+            "Published action response {}.result status={}: {}",
+            action, status, output.val
+        );
         Ok(())
     }
 
@@ -1217,13 +1301,19 @@ impl NostrChannel {
                 if let Some(g) = group {
                     // Group-specific stop
                     warn!("🛑 Action control.stop for #{}", g);
-                    let gc = dc.groups.entry(g.to_string()).or_insert_with(GroupConfig::default);
+                    let gc = dc
+                        .groups
+                        .entry(g.to_string())
+                        .or_insert_with(GroupConfig::default);
                     gc.respond_mode = Some(RespondMode::None);
                 } else {
                     // Global HALT
                     warn!("🛑 Action control.stop (global) — all groups silenced");
                     for g in &self.config.groups {
-                        let gc = dc.groups.entry(g.clone()).or_insert_with(GroupConfig::default);
+                        let gc = dc
+                            .groups
+                            .entry(g.clone())
+                            .or_insert_with(GroupConfig::default);
                         gc.respond_mode = Some(RespondMode::None);
                     }
                     let global = dc.global.get_or_insert_with(GroupConfig::default);
@@ -1244,12 +1334,18 @@ impl NostrChannel {
                 let mut dc = self.dynamic_config.write().await;
                 if let Some(g) = group {
                     warn!("▶️ Action control.resume #{} to {:?}", g, new_mode);
-                    let gc = dc.groups.entry(g.to_string()).or_insert_with(GroupConfig::default);
+                    let gc = dc
+                        .groups
+                        .entry(g.to_string())
+                        .or_insert_with(GroupConfig::default);
                     gc.respond_mode = Some(new_mode.clone());
                 } else {
                     warn!("▶️ Action control.resume (global) to {:?}", new_mode);
                     for g in &self.config.groups {
-                        let gc = dc.groups.entry(g.clone()).or_insert_with(GroupConfig::default);
+                        let gc = dc
+                            .groups
+                            .entry(g.clone())
+                            .or_insert_with(GroupConfig::default);
                         gc.respond_mode = Some(new_mode.clone());
                     }
                     let global = dc.global.get_or_insert_with(GroupConfig::default);
@@ -1269,11 +1365,15 @@ impl NostrChannel {
                     "groups": self.config.groups,
                     "model": "configured",
                 });
-                self.publish_action_response(event, action, "ok", &content.to_string()).await
+                self.publish_action_response(event, action, "ok", &content.to_string())
+                    .await
             }
 
             "config.set" => {
-                let respond_mode = params.iter().find(|(k, _)| k == "respond_mode").map(|(_, v)| v.as_str());
+                let respond_mode = params
+                    .iter()
+                    .find(|(k, _)| k == "respond_mode")
+                    .map(|(_, v)| v.as_str());
                 let context_history = params
                     .iter()
                     .find(|(k, _)| k == "context_history")
@@ -1281,14 +1381,20 @@ impl NostrChannel {
 
                 let mut dc = self.dynamic_config.write().await;
                 if let Some(g) = group {
-                    let gc = dc.groups.entry(g.to_string()).or_insert_with(GroupConfig::default);
+                    let gc = dc
+                        .groups
+                        .entry(g.to_string())
+                        .or_insert_with(GroupConfig::default);
                     if let Some(mode) = respond_mode {
                         gc.respond_mode = Some(RespondMode::from_str(mode));
                     }
                     if let Some(n) = context_history {
                         gc.context_history = Some(n);
                     }
-                    info!("Config updated for #{}: mode={:?} history={:?}", g, gc.respond_mode, gc.context_history);
+                    info!(
+                        "Config updated for #{}: mode={:?} history={:?}",
+                        g, gc.respond_mode, gc.context_history
+                    );
                 } else {
                     let gc = dc.global.get_or_insert_with(GroupConfig::default);
                     if let Some(mode) = respond_mode {
@@ -1297,7 +1403,10 @@ impl NostrChannel {
                     if let Some(n) = context_history {
                         gc.context_history = Some(n);
                     }
-                    info!("Global config updated: mode={:?} history={:?}", gc.respond_mode, gc.context_history);
+                    info!(
+                        "Global config updated: mode={:?} history={:?}",
+                        gc.respond_mode, gc.context_history
+                    );
                 }
                 drop(dc);
 
@@ -1306,7 +1415,8 @@ impl NostrChannel {
                     "context_history": context_history,
                     "applied_to": group.unwrap_or("global"),
                 });
-                self.publish_action_response(event, action, "ok", &content.to_string()).await
+                self.publish_action_response(event, action, "ok", &content.to_string())
+                    .await
             }
 
             "config.get" => {
@@ -1314,13 +1424,15 @@ impl NostrChannel {
                 let (mode, history) = if let Some(g) = group {
                     let gc = dc.groups.get(g);
                     (
-                        gc.and_then(|c| c.respond_mode.as_ref()).map(|m| format!("{:?}", m)),
+                        gc.and_then(|c| c.respond_mode.as_ref())
+                            .map(|m| format!("{:?}", m)),
                         gc.and_then(|c| c.context_history),
                     )
                 } else {
                     let gc = dc.global.as_ref();
                     (
-                        gc.and_then(|c| c.respond_mode.as_ref()).map(|m| format!("{:?}", m)),
+                        gc.and_then(|c| c.respond_mode.as_ref())
+                            .map(|m| format!("{:?}", m)),
                         gc.and_then(|c| c.context_history),
                     )
                 };
@@ -1333,13 +1445,15 @@ impl NostrChannel {
                     "file_respond_mode": format!("{:?}", self.config.respond_mode),
                     "file_context_history": self.config.context_history,
                 });
-                self.publish_action_response(event, action, "ok", &content.to_string()).await
+                self.publish_action_response(event, action, "ok", &content.to_string())
+                    .await
             }
 
             _ => {
                 warn!("Unknown action: {}", action);
                 let content = serde_json::json!({"error": format!("unknown action: {}", action)});
-                self.publish_action_response(event, action, "error", &content.to_string()).await
+                self.publish_action_response(event, action, "error", &content.to_string())
+                    .await
             }
         }
     }
@@ -1423,7 +1537,12 @@ impl Channel for NostrChannel {
 
             // Add our own reply to the ring buffer so context history includes both sides
             let our_name = self.resolve_name(&self.config.keys.public_key()).await;
-            let our_npub = self.config.keys.public_key().to_bech32().unwrap_or_default();
+            let our_npub = self
+                .config
+                .keys
+                .public_key()
+                .to_bech32()
+                .unwrap_or_default();
             self.push_history(
                 group,
                 HistoryMessage {
@@ -1452,17 +1571,19 @@ impl Channel for NostrChannel {
 
             // Record outgoing DM in conversation history
             let our_name = self.resolve_name(&self.config.keys.public_key()).await;
-            self.seen_events.push_dm_history(DmHistoryMessage {
-                sender_hex: pubkey.to_hex(),
-                sender_name: our_name,
-                content: message.content.clone(),
-                timestamp: std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs(),
-                event_id: format!("out_{}", pubkey.to_hex()),
-                is_outgoing: true,
-            }).await;
+            self.seen_events
+                .push_dm_history(DmHistoryMessage {
+                    sender_hex: pubkey.to_hex(),
+                    sender_name: our_name,
+                    content: message.content.clone(),
+                    timestamp: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs(),
+                    event_id: format!("out_{}", pubkey.to_hex()),
+                    is_outgoing: true,
+                })
+                .await;
         }
 
         // Kind 31122: idle state after 5s delay (fire-and-forget)
@@ -1471,7 +1592,10 @@ impl Channel for NostrChannel {
         let debounce = self.chat_activity_last_publish.clone();
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_secs(5)).await;
-            debounce.lock().await.insert(idle_ctx.clone(), Instant::now());
+            debounce
+                .lock()
+                .await
+                .insert(idle_ctx.clone(), Instant::now());
             let tags = vec![
                 Tag::custom(
                     TagKind::custom("d"),
@@ -1860,7 +1984,7 @@ impl Channel for NostrChannel {
                                     channel: "nostr:tasks".to_string(),
                                     timestamp: event.created_at.as_secs(),
                                     thread_ts: None,
-                                    
+
                                 };
 
                                 if tx.send(msg).await.is_err() {
@@ -2244,15 +2368,30 @@ mod tests {
 
     #[test]
     fn compact_group_header_format() {
-        let header =
-            NostrChannel::compact_group_header("techteam", "k0sh", "npub1abcdef1234567890abcdef", 9, "abcdef1234567890", false);
-        assert_eq!(header, "[nostr:group=#techteam from=k0sh npub=npub1abcdef123456789 kind=9 id=abcdef12]");
+        let header = NostrChannel::compact_group_header(
+            "techteam",
+            "k0sh",
+            "npub1abcdef1234567890abcdef",
+            9,
+            "abcdef1234567890",
+            false,
+        );
+        assert_eq!(
+            header,
+            "[nostr:group=#techteam from=k0sh npub=npub1abcdef123456789 kind=9 id=abcdef12]"
+        );
     }
 
     #[test]
     fn compact_group_header_owner() {
-        let header =
-            NostrChannel::compact_group_header("techteam", "k0sh", "npub1abcdef1234567890abcdef", 9, "abcdef1234567890", true);
+        let header = NostrChannel::compact_group_header(
+            "techteam",
+            "k0sh",
+            "npub1abcdef1234567890abcdef",
+            9,
+            "abcdef1234567890",
+            true,
+        );
         assert_eq!(header, "[nostr:group=#techteam from=k0sh npub=npub1abcdef123456789 role=owner kind=9 id=abcdef12]");
     }
 
@@ -2272,12 +2411,8 @@ mod tests {
 
     #[test]
     fn compact_task_content_without_detail() {
-        let content = NostrChannel::compact_task_content(
-            "abcdef1234567890",
-            "abc1234567890000",
-            "Done",
-            "",
-        );
+        let content =
+            NostrChannel::compact_task_content("abcdef1234567890", "abc1234567890000", "Done", "");
         assert_eq!(content, "[nostr:event=abcdef12] Task abc12345 → Done");
     }
 
@@ -2318,7 +2453,10 @@ mod tests {
     fn parse_config_event_valid() {
         let keys = Keys::generate();
         let tags = vec![
-            Tag::custom(TagKind::custom("d"), vec!["snowclaw:config:group:techteam".to_string()]),
+            Tag::custom(
+                TagKind::custom("d"),
+                vec!["snowclaw:config:group:techteam".to_string()],
+            ),
             Tag::custom(TagKind::custom("respond_mode"), vec!["all".to_string()]),
             Tag::custom(TagKind::custom("context_history"), vec!["30".to_string()]),
         ];
@@ -2337,7 +2475,10 @@ mod tests {
     fn parse_config_event_global() {
         let keys = Keys::generate();
         let tags = vec![
-            Tag::custom(TagKind::custom("d"), vec!["snowclaw:config:global".to_string()]),
+            Tag::custom(
+                TagKind::custom("d"),
+                vec!["snowclaw:config:global".to_string()],
+            ),
             Tag::custom(TagKind::custom("respond_mode"), vec!["owner".to_string()]),
         ];
         let event = EventBuilder::new(Kind::Custom(30078), "")
@@ -2354,23 +2495,41 @@ mod tests {
     #[test]
     fn apply_config_entry_scopes() {
         let mut dc = DynamicConfig::default();
-        
-        NostrChannel::apply_config_entry(&mut dc, ("snowclaw:config:global".into(), GroupConfig {
-            respond_mode: Some(RespondMode::Owner),
-            context_history: Some(10),
-        }));
+
+        NostrChannel::apply_config_entry(
+            &mut dc,
+            (
+                "snowclaw:config:global".into(),
+                GroupConfig {
+                    respond_mode: Some(RespondMode::Owner),
+                    context_history: Some(10),
+                },
+            ),
+        );
         assert!(dc.global.is_some());
-        
-        NostrChannel::apply_config_entry(&mut dc, ("snowclaw:config:group:test".into(), GroupConfig {
-            respond_mode: Some(RespondMode::All),
-            context_history: None,
-        }));
+
+        NostrChannel::apply_config_entry(
+            &mut dc,
+            (
+                "snowclaw:config:group:test".into(),
+                GroupConfig {
+                    respond_mode: Some(RespondMode::All),
+                    context_history: None,
+                },
+            ),
+        );
         assert!(dc.groups.contains_key("test"));
 
-        NostrChannel::apply_config_entry(&mut dc, ("snowclaw:config:npub:abc123".into(), GroupConfig {
-            respond_mode: Some(RespondMode::Mention),
-            context_history: Some(5),
-        }));
+        NostrChannel::apply_config_entry(
+            &mut dc,
+            (
+                "snowclaw:config:npub:abc123".into(),
+                GroupConfig {
+                    respond_mode: Some(RespondMode::Mention),
+                    context_history: Some(5),
+                },
+            ),
+        );
         assert!(dc.npubs.contains_key("abc123"));
     }
 

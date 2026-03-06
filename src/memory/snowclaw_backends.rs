@@ -14,6 +14,8 @@ pub enum SnowclawBackendKind {
     Nostr,
     /// Collective — snow-memory FTS5 index with trust-ranked search.
     Collective,
+    /// NomenSocket — Nomen via Unix domain socket (out-of-process daemon).
+    NomenSocket,
 }
 
 const NOSTR_PROFILE: MemoryBackendProfile = MemoryBackendProfile {
@@ -34,11 +36,21 @@ const COLLECTIVE_PROFILE: MemoryBackendProfile = MemoryBackendProfile {
     optional_dependency: false,
 };
 
+const NOMEN_SOCKET_PROFILE: MemoryBackendProfile = MemoryBackendProfile {
+    key: "nomen-socket",
+    label: "Nomen via Unix socket — out-of-process Nomen daemon",
+    auto_save_default: true,
+    uses_sqlite_hygiene: false,
+    sqlite_based: false,
+    optional_dependency: false,
+};
+
 /// Classify a backend name, checking snowclaw-specific backends first.
 pub fn classify(name: &str) -> SnowclawBackendKind {
     match name {
         "nostr" => SnowclawBackendKind::Nostr,
         "collective" => SnowclawBackendKind::Collective,
+        "nomen-socket" => SnowclawBackendKind::NomenSocket,
         other => SnowclawBackendKind::Upstream(super::backend::classify_memory_backend(other)),
     }
 }
@@ -48,6 +60,7 @@ pub fn snowclaw_backend_profile(name: &str) -> Option<MemoryBackendProfile> {
     match classify(name) {
         SnowclawBackendKind::Nostr => Some(NOSTR_PROFILE),
         SnowclawBackendKind::Collective => Some(COLLECTIVE_PROFILE),
+        SnowclawBackendKind::NomenSocket => Some(NOMEN_SOCKET_PROFILE),
         SnowclawBackendKind::Upstream(_) => None,
     }
 }
@@ -60,6 +73,7 @@ mod tests {
     fn classify_snowclaw_backends() {
         assert_eq!(classify("nostr"), SnowclawBackendKind::Nostr);
         assert_eq!(classify("collective"), SnowclawBackendKind::Collective);
+        assert_eq!(classify("nomen-socket"), SnowclawBackendKind::NomenSocket);
     }
 
     #[test]
@@ -80,13 +94,14 @@ mod tests {
 
     #[test]
     fn snowclaw_profiles_have_expected_keys() {
-        assert_eq!(
-            snowclaw_backend_profile("nostr").unwrap().key,
-            "nostr"
-        );
+        assert_eq!(snowclaw_backend_profile("nostr").unwrap().key, "nostr");
         assert_eq!(
             snowclaw_backend_profile("collective").unwrap().key,
             "collective"
+        );
+        assert_eq!(
+            snowclaw_backend_profile("nomen-socket").unwrap().key,
+            "nomen-socket"
         );
         assert!(snowclaw_backend_profile("sqlite").is_none());
     }

@@ -87,7 +87,7 @@ async fn stdio_io_loop(
         loop {
             line_buf.clear();
             match reader.read_line(&mut line_buf).await {
-                Ok(0) => break,  // EOF
+                Ok(0) => break, // EOF
                 Ok(_) => {
                     let trimmed = line_buf.trim().to_string();
                     if !trimmed.is_empty() {

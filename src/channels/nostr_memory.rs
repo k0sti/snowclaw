@@ -165,8 +165,10 @@ impl NostrMemory {
     pub fn set_relay_client(&mut self, client: Client, pubkey: PublicKey) {
         self.relay_client = Some(client);
         self.relay_pubkey = Some(pubkey);
-        info!("NostrMemory relay persistence enabled (pubkey: {})",
-            pubkey.to_bech32().unwrap_or_default());
+        info!(
+            "NostrMemory relay persistence enabled (pubkey: {})",
+            pubkey.to_bech32().unwrap_or_default()
+        );
     }
 
     /// One-time migration: load legacy `nostr_memory.json` and insert into SQLite.
@@ -273,10 +275,7 @@ impl NostrMemory {
 
         let is_new = {
             let db = conn.lock();
-            let exists = social::get_group(&db, group_id)
-                .ok()
-                .flatten()
-                .is_some();
+            let exists = social::get_group(&db, group_id).ok().flatten().is_some();
 
             if exists {
                 let _ = db.execute(
@@ -391,11 +390,7 @@ impl NostrMemory {
     }
 
     /// Update profile metadata for an npub. Tracks name changes in name_history.
-    pub async fn update_profile(
-        &self,
-        hex_pubkey: &str,
-        metadata: ProfileMetadata,
-    ) {
+    pub async fn update_profile(&self, hex_pubkey: &str, metadata: ProfileMetadata) {
         let Some(ref conn) = self.sqlite else {
             return;
         };
@@ -405,7 +400,9 @@ impl NostrMemory {
             let db = conn.lock();
             if let Ok(Some(mut existing)) = social::get_npub(&db, hex_pubkey) {
                 // Track name change in name_history
-                let new_name = metadata.display_name.as_deref()
+                let new_name = metadata
+                    .display_name
+                    .as_deref()
                     .or(metadata.name.as_deref());
                 if let Some(new_name) = new_name {
                     if new_name != existing.display_name {
@@ -675,15 +672,9 @@ impl NostrMemory {
         let filter = Filter::new()
             .author(*pubkey)
             .kind(Kind::Custom(30078))
-            .custom_tag(
-                SingleLetterTag::lowercase(Alphabet::D),
-                "snowclaw:memory:",
-            );
+            .custom_tag(SingleLetterTag::lowercase(Alphabet::D), "snowclaw:memory:");
 
-        let events = match client
-            .fetch_events(filter, Duration::from_secs(15))
-            .await
-        {
+        let events = match client.fetch_events(filter, Duration::from_secs(15)).await {
             Ok(evts) => evts,
             Err(e) => {
                 warn!("Failed to fetch social events from relay: {e}");
@@ -1032,7 +1023,9 @@ mod tests {
         let mem = NostrMemory::new(dir.path());
 
         // ensure_npub returns false (no-op)
-        let is_new = mem.ensure_npub("aabb", "Alice", 1000, Some("techteam"), false).await;
+        let is_new = mem
+            .ensure_npub("aabb", "Alice", 1000, Some("techteam"), false)
+            .await;
         assert!(!is_new);
 
         // get returns None
@@ -1054,7 +1047,9 @@ mod tests {
         let conn = test_sqlite_conn();
         let mem = NostrMemory::with_sqlite(dir.path(), conn.clone());
 
-        let is_new = mem.ensure_npub("aabb", "Alice", 1000, Some("techteam"), false).await;
+        let is_new = mem
+            .ensure_npub("aabb", "Alice", 1000, Some("techteam"), false)
+            .await;
         assert!(is_new);
 
         // Verify via get_npub
@@ -1070,7 +1065,9 @@ mod tests {
             assert_eq!(npub.first_seen, 1000);
         }
 
-        let is_new2 = mem.ensure_npub("aabb", "Alice", 1001, Some("techteam"), false).await;
+        let is_new2 = mem
+            .ensure_npub("aabb", "Alice", 1001, Some("techteam"), false)
+            .await;
         assert!(!is_new2);
 
         // Verify last_interaction updated in SQLite
@@ -1141,7 +1138,8 @@ mod tests {
         let conn = test_sqlite_conn();
         let mem = NostrMemory::with_sqlite(dir.path(), conn);
 
-        mem.ensure_npub("aa", "Alice", 100, Some("test"), false).await;
+        mem.ensure_npub("aa", "Alice", 100, Some("test"), false)
+            .await;
         mem.add_npub_owner_note("aa", "prefers Finnish").await;
         mem.add_npub_note("aa", "asked about Rust").await;
 
@@ -1221,9 +1219,14 @@ mod tests {
         let mem = NostrMemory::with_sqlite(dir.path(), conn.clone());
 
         mem.try_index_message(
-            "evt1", "aabb", Some("techteam"),
+            "evt1",
+            "aabb",
+            Some("techteam"),
             "This is a substantial message about Rust programming",
-            1000, 9, false, false,
+            1000,
+            9,
+            false,
+            false,
         );
 
         let results = mem.search_messages("Rust programming", 10);
@@ -1239,9 +1242,14 @@ mod tests {
         let mem = NostrMemory::with_sqlite(dir.path(), conn.clone());
 
         mem.try_index_message(
-            "evt1", "aabb", Some("techteam"),
+            "evt1",
+            "aabb",
+            Some("techteam"),
             "hi", // too short
-            1000, 9, false, false,
+            1000,
+            9,
+            false,
+            false,
         );
 
         let db = conn.lock();
@@ -1255,8 +1263,7 @@ mod tests {
         let mem = NostrMemory::with_sqlite(dir.path(), conn.clone());
 
         mem.try_index_message(
-            "evt1", "aabb", None,
-            "short DM", // short but is_dm=true
+            "evt1", "aabb", None, "short DM", // short but is_dm=true
             1000, 14, false, true,
         );
 
@@ -1271,9 +1278,14 @@ mod tests {
         let mem = NostrMemory::with_sqlite(dir.path(), conn.clone());
 
         mem.try_index_message(
-            "evt1", "aabb", Some("devteam"),
+            "evt1",
+            "aabb",
+            Some("devteam"),
             "hey bot!", // short but is_bot_mention=true
-            1000, 9, true, false,
+            1000,
+            9,
+            true,
+            false,
         );
 
         let results = mem.search_messages("hey bot", 10);
@@ -1296,9 +1308,14 @@ mod tests {
 
         // Should not panic
         mem.try_index_message(
-            "evt1", "aabb", Some("group"),
+            "evt1",
+            "aabb",
+            Some("group"),
             "This is a substantial message for testing",
-            1000, 9, false, false,
+            1000,
+            9,
+            false,
+            false,
         );
     }
 
@@ -1367,10 +1384,16 @@ mod tests {
         );
 
         let results = mem.unified_search("Rust", 10);
-        assert!(results.len() >= 2, "Expected hits from both docs and messages");
+        assert!(
+            results.len() >= 2,
+            "Expected hits from both docs and messages"
+        );
 
         let sources: Vec<&str> = results.iter().map(|h| h.source()).collect();
-        assert!(sources.contains(&"document"), "Should contain document hits");
+        assert!(
+            sources.contains(&"document"),
+            "Should contain document hits"
+        );
         assert!(sources.contains(&"message"), "Should contain message hits");
     }
 

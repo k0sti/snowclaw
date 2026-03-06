@@ -51,7 +51,10 @@ impl NostrMemory {
         let cache = Self::load_cache(&cache_path);
 
         if !cache.entries.is_empty() {
-            debug!("Nostr memory: loaded {} cached entries", cache.entries.len());
+            debug!(
+                "Nostr memory: loaded {} cached entries",
+                cache.entries.len()
+            );
         }
 
         Self {
@@ -350,9 +353,8 @@ impl Memory for NostrMemory {
                                 let matches_query =
                                     entry.content.to_lowercase().contains(&query_lower)
                                         || entry.key.to_lowercase().contains(&query_lower);
-                                let matches_session = session_id.map_or(true, |sid| {
-                                    entry.session_id.as_deref() == Some(sid)
-                                });
+                                let matches_session = session_id
+                                    .map_or(true, |sid| entry.session_id.as_deref() == Some(sid));
                                 matches_query && matches_session
                             })
                             .take(limit)
@@ -375,9 +377,8 @@ impl Memory for NostrMemory {
             .filter(|e| {
                 let matches_query = e.key.to_lowercase().contains(&query_lower)
                     || e.content.to_lowercase().contains(&query_lower);
-                let matches_session = session_id.map_or(true, |sid| {
-                    e.session_id.as_deref() == Some(sid)
-                });
+                let matches_session =
+                    session_id.map_or(true, |sid| e.session_id.as_deref() == Some(sid));
                 matches_query && matches_session
             })
             .cloned()
@@ -638,9 +639,13 @@ mod tests {
         let public_key = keys.public_key();
         let plaintext = "secret memory content";
 
-        let ciphertext =
-            nip44::encrypt(keys.secret_key(), &public_key, plaintext, nip44::Version::V2)
-                .expect("NIP-44 encrypt should succeed");
+        let ciphertext = nip44::encrypt(
+            keys.secret_key(),
+            &public_key,
+            plaintext,
+            nip44::Version::V2,
+        )
+        .expect("NIP-44 encrypt should succeed");
 
         assert_ne!(ciphertext, plaintext);
 

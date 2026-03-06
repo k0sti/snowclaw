@@ -1,11 +1,11 @@
+use anyhow::Result;
+use chrono::{DateTime, Duration, Utc};
 use lru::LruCache;
+use nostr_sdk::{Event, Kind, PublicKey};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use tokio::sync::RwLock;
-use serde::{Deserialize, Serialize};
-use chrono::{DateTime, Utc, Duration};
-use nostr_sdk::{Event, PublicKey, Kind};
-use anyhow::Result;
 
 const DEFAULT_CACHE_SIZE: usize = 1000;
 const PROFILE_TTL_HOURS: i64 = 24;
@@ -51,7 +51,7 @@ impl ProfileCache {
     pub fn new() -> Self {
         Self {
             cache: RwLock::new(LruCache::new(
-                NonZeroUsize::new(DEFAULT_CACHE_SIZE).unwrap()
+                NonZeroUsize::new(DEFAULT_CACHE_SIZE).unwrap(),
             )),
             stats: RwLock::new(CacheStats::default()),
         }
@@ -59,16 +59,14 @@ impl ProfileCache {
 
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
-            cache: RwLock::new(LruCache::new(
-                NonZeroUsize::new(capacity).unwrap()
-            )),
+            cache: RwLock::new(LruCache::new(NonZeroUsize::new(capacity).unwrap())),
             stats: RwLock::new(CacheStats::default()),
         }
     }
 
     pub async fn get_display_name(&self, pubkey: &PublicKey) -> String {
         let pubkey_hex = pubkey.to_hex();
-        
+
         let cached_profile = {
             let mut cache = self.cache.write().await;
             if let Some(cached) = cache.get(&pubkey_hex) {
@@ -110,7 +108,7 @@ impl ProfileCache {
 
         let pubkey_hex = event.pubkey.to_hex();
         let now = Utc::now();
-        
+
         let cached_profile = CachedProfile {
             profile,
             cached_at: now,
@@ -126,7 +124,7 @@ impl ProfileCache {
     pub async fn has_profile(&self, pubkey: &PublicKey) -> bool {
         let pubkey_hex = pubkey.to_hex();
         let cache = self.cache.read().await;
-        
+
         if let Some(cached) = cache.peek(&pubkey_hex) {
             Utc::now() < cached.expires_at
         } else {
@@ -151,21 +149,21 @@ impl ProfileCache {
     pub async fn stats(&self) -> HashMap<String, u64> {
         let stats = self.stats.read().await;
         let cache = self.cache.read().await;
-        
+
         let mut result = HashMap::new();
         result.insert("hits".to_string(), stats.hits);
         result.insert("misses".to_string(), stats.misses);
         result.insert("stores".to_string(), stats.stores);
         result.insert("size".to_string(), cache.len() as u64);
         result.insert("capacity".to_string(), cache.cap().get() as u64);
-        
+
         let hit_rate = if stats.hits + stats.misses > 0 {
             (stats.hits as f64) / ((stats.hits + stats.misses) as f64) * 100.0
         } else {
             0.0
         };
         result.insert("hit_rate_percent".to_string(), hit_rate as u64);
-        
+
         result
     }
 
@@ -176,7 +174,7 @@ impl ProfileCache {
                 return display_name.trim().to_string();
             }
         }
-        
+
         if let Some(name) = &profile.name {
             if !name.trim().is_empty() {
                 return name.trim().to_string();
@@ -193,7 +191,7 @@ impl ProfileCache {
 
     pub async fn request_missing_profiles(&self, pubkeys: &[PublicKey]) -> Vec<PublicKey> {
         let mut missing = Vec::new();
-        
+
         for pubkey in pubkeys {
             if !self.has_profile(pubkey).await {
                 missing.push(*pubkey);
@@ -206,7 +204,7 @@ impl ProfileCache {
     pub async fn get_profile(&self, pubkey: &PublicKey) -> Option<Profile> {
         let pubkey_hex = pubkey.to_hex();
         let mut cache = self.cache.write().await;
-        
+
         if let Some(cached) = cache.get(&pubkey_hex) {
             if Utc::now() < cached.expires_at {
                 return Some(cached.profile.clone());
@@ -214,7 +212,7 @@ impl ProfileCache {
                 cache.pop(&pubkey_hex);
             }
         }
-        
+
         None
     }
 
@@ -247,10 +245,14 @@ impl ProfileCache {
         if let Some(profile) = cached_profile {
             self.stats.write().await.hits += 1;
             if let Some(dn) = &profile.display_name {
-                if !dn.trim().is_empty() { return dn.trim().to_string(); }
+                if !dn.trim().is_empty() {
+                    return dn.trim().to_string();
+                }
             }
             if let Some(n) = &profile.name {
-                if !n.trim().is_empty() { return n.trim().to_string(); }
+                if !n.trim().is_empty() {
+                    return n.trim().to_string();
+                }
             }
         } else {
             self.stats.write().await.misses += 1;
@@ -262,11 +264,14 @@ impl ProfileCache {
     pub async fn store_profile_raw(&self, pubkey_hex: &str, content: &str) -> Result<()> {
         let profile: Profile = serde_json::from_str(content)?;
         let now = Utc::now();
-        self.cache.write().await.put(pubkey_hex.to_string(), CachedProfile {
-            profile,
-            cached_at: now,
-            expires_at: now + Duration::hours(PROFILE_TTL_HOURS),
-        });
+        self.cache.write().await.put(
+            pubkey_hex.to_string(),
+            CachedProfile {
+                profile,
+                cached_at: now,
+                expires_at: now + Duration::hours(PROFILE_TTL_HOURS),
+            },
+        );
         self.stats.write().await.stores += 1;
         Ok(())
     }
@@ -274,9 +279,13 @@ impl ProfileCache {
     /// Get all known pubkey -> display_name mappings for mention detection
     pub async fn get_known_pubkeys(&self) -> std::collections::HashMap<String, String> {
         let cache = self.cache.read().await;
-        cache.iter()
+        cache
+            .iter()
             .map(|(pubkey_hex, cached_profile)| {
-                let display_name = cached_profile.profile.display_name.clone()
+                let display_name = cached_profile
+                    .profile
+                    .display_name
+                    .clone()
                     .or_else(|| cached_profile.profile.name.clone())
                     .unwrap_or_else(|| format!("{}...", &pubkey_hex[..8]));
                 (pubkey_hex.clone(), display_name)

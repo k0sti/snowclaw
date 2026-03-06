@@ -7,6 +7,7 @@ pub enum MemoryBackendKind {
     Postgres,
     Qdrant,
     Markdown,
+    Nomen,
     None,
     Unknown,
 }
@@ -85,6 +86,15 @@ const SQLITE_QDRANT_HYBRID_PROFILE: MemoryBackendProfile = MemoryBackendProfile 
     optional_dependency: false,
 };
 
+const NOMEN_PROFILE: MemoryBackendProfile = MemoryBackendProfile {
+    key: "nomen",
+    label: "Nomen — Nostr-native memory (SurrealDB + relay sync)",
+    auto_save_default: true,
+    uses_sqlite_hygiene: false,
+    sqlite_based: false,
+    optional_dependency: false,
+};
+
 const NONE_PROFILE: MemoryBackendProfile = MemoryBackendProfile {
     key: "none",
     label: "None — disable persistent memory",
@@ -103,12 +113,13 @@ const CUSTOM_PROFILE: MemoryBackendProfile = MemoryBackendProfile {
     optional_dependency: false,
 };
 
-const SELECTABLE_MEMORY_BACKENDS: [MemoryBackendProfile; 6] = [
+const SELECTABLE_MEMORY_BACKENDS: [MemoryBackendProfile; 7] = [
     SQLITE_PROFILE,
     SQLITE_QDRANT_HYBRID_PROFILE,
     LUCID_PROFILE,
     CORTEX_MEM_PROFILE,
     MARKDOWN_PROFILE,
+    NOMEN_PROFILE,
     NONE_PROFILE,
 ];
 
@@ -129,6 +140,7 @@ pub fn classify_memory_backend(backend: &str) -> MemoryBackendKind {
         "postgres" => MemoryBackendKind::Postgres,
         "qdrant" => MemoryBackendKind::Qdrant,
         "markdown" => MemoryBackendKind::Markdown,
+        "nomen" => MemoryBackendKind::Nomen,
         "none" => MemoryBackendKind::None,
         _ => MemoryBackendKind::Unknown,
     }
@@ -143,6 +155,7 @@ pub fn memory_backend_profile(backend: &str) -> MemoryBackendProfile {
         MemoryBackendKind::Postgres => POSTGRES_PROFILE,
         MemoryBackendKind::Qdrant => QDRANT_PROFILE,
         MemoryBackendKind::Markdown => MARKDOWN_PROFILE,
+        MemoryBackendKind::Nomen => NOMEN_PROFILE,
         MemoryBackendKind::None => NONE_PROFILE,
         MemoryBackendKind::Unknown => CUSTOM_PROFILE,
     }
@@ -176,6 +189,7 @@ mod tests {
             classify_memory_backend("markdown"),
             MemoryBackendKind::Markdown
         );
+        assert_eq!(classify_memory_backend("nomen"), MemoryBackendKind::Nomen);
         assert_eq!(classify_memory_backend("none"), MemoryBackendKind::None);
     }
 
@@ -195,13 +209,14 @@ mod tests {
     #[test]
     fn selectable_backends_are_ordered_for_onboarding() {
         let backends = selectable_memory_backends();
-        assert_eq!(backends.len(), 6);
+        assert_eq!(backends.len(), 7);
         assert_eq!(backends[0].key, "sqlite");
         assert_eq!(backends[1].key, "sqlite_qdrant_hybrid");
         assert_eq!(backends[2].key, "lucid");
         assert_eq!(backends[3].key, "cortex-mem");
         assert_eq!(backends[4].key, "markdown");
-        assert_eq!(backends[5].key, "none");
+        assert_eq!(backends[5].key, "nomen");
+        assert_eq!(backends[6].key, "none");
     }
 
     #[test]

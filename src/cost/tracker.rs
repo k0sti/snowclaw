@@ -212,8 +212,14 @@ impl CostTracker {
             ));
         }
 
-        let record =
-            CostRecord::with_breakdown(&self.session_id, usage, channel, room, message_type, breakdown);
+        let record = CostRecord::with_breakdown(
+            &self.session_id,
+            usage,
+            channel,
+            room,
+            message_type,
+            breakdown,
+        );
 
         {
             let mut storage = self.lock_storage();
@@ -256,7 +262,9 @@ impl CostTracker {
 
 fn resolve_storage_path(workspace_dir: &Path) -> Result<PathBuf> {
     let storage_path = workspace_dir.join("state").join("costs.jsonl");
-    let legacy_path = workspace_dir.join(crate::config::APP_DIR_NAME).join("costs.db");
+    let legacy_path = workspace_dir
+        .join(crate::config::APP_DIR_NAME)
+        .join("costs.db");
 
     if !storage_path.exists() && legacy_path.exists() {
         if let Some(parent) = storage_path.parent() {
@@ -530,11 +538,7 @@ impl CostStorage {
             model_entry.total_tokens += record.usage.total_tokens;
             model_entry.request_count += 1;
 
-            let channel_name = record
-                .channel
-                .as_deref()
-                .unwrap_or("unknown")
-                .to_string();
+            let channel_name = record.channel.as_deref().unwrap_or("unknown").to_string();
             let channel_entry = breakdown
                 .by_channel
                 .entry(channel_name.clone())
@@ -578,20 +582,17 @@ impl CostStorage {
         let mut channels: HashMap<String, ChannelStats> = HashMap::new();
 
         self.for_each_record(|record| {
-            let channel_name = record
-                .channel
-                .as_deref()
-                .unwrap_or("unknown")
-                .to_string();
-            let channel_entry = channels
-                .entry(channel_name.clone())
-                .or_insert_with(|| ChannelStats {
-                    channel: channel_name,
-                    cost_usd: 0.0,
-                    total_tokens: 0,
-                    request_count: 0,
-                    by_room: HashMap::new(),
-                });
+            let channel_name = record.channel.as_deref().unwrap_or("unknown").to_string();
+            let channel_entry =
+                channels
+                    .entry(channel_name.clone())
+                    .or_insert_with(|| ChannelStats {
+                        channel: channel_name,
+                        cost_usd: 0.0,
+                        total_tokens: 0,
+                        request_count: 0,
+                        by_room: HashMap::new(),
+                    });
             channel_entry.cost_usd += record.usage.cost_usd;
             channel_entry.total_tokens += record.usage.total_tokens;
             channel_entry.request_count += 1;

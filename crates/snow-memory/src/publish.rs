@@ -54,7 +54,11 @@ pub fn build_memory_event(memory: &Memory, pubkey: &str) -> UnsignedEvent {
         pubkey: pubkey.to_string(),
         created_at: nostr_event.created_at,
         kind: nostr_event.kind as u32,
-        tags: nostr_event.tags.into_iter().map(|(k, v)| vec![k, v]).collect(),
+        tags: nostr_event
+            .tags
+            .into_iter()
+            .map(|(k, v)| vec![k, v])
+            .collect(),
         content: nostr_event.content,
     }
 }
@@ -67,7 +71,11 @@ pub fn build_profile_event(profile: &AgentProfile, pubkey: &str) -> UnsignedEven
         pubkey: pubkey.to_string(),
         created_at: nostr_event.created_at,
         kind: nostr_event.kind as u32,
-        tags: nostr_event.tags.into_iter().map(|(k, v)| vec![k, v]).collect(),
+        tags: nostr_event
+            .tags
+            .into_iter()
+            .map(|(k, v)| vec![k, v])
+            .collect(),
         content: nostr_event.content,
     }
 }

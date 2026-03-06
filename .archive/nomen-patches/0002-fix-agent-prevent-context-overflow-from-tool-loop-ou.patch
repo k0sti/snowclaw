@@ -1,0 +1,300 @@
+From 2cf61c8711cb9c529c81c68f03be7a92bdbbd962 Mon Sep 17 00:00:00 2001
+From: kosti <koshdot@proton.me>
+Date: Fri, 6 Mar 2026 15:05:26 +0200
+Subject: [PATCH 02/13] fix(agent): prevent context overflow from tool-loop
+ outputs
+
+- add docs/context-window-overflow-tool-loop.md for upstream PR prep
+- cap shell and file_read outputs at 100KB with truncation notices
+- add pre-flight token budget guard in tool loop to truncate old tool results
+- include small compile fixes in agent/integrations touched by the patch
+---
+ docs/context-window-overflow-tool-loop.md | 39 ++++++++++++++++++
+ src/agent/agent.rs                        |  4 +-
+ src/agent/loop_.rs                        | 50 +++++++++++++++++++++++
+ src/integrations/registry.rs              | 10 ++++-
+ src/tools/file_read.rs                    | 40 ++++++++++++++++--
+ src/tools/shell.rs                        | 16 ++++----
+ 6 files changed, 146 insertions(+), 13 deletions(-)
+ create mode 100644 docs/context-window-overflow-tool-loop.md
+
+diff --git a/docs/context-window-overflow-tool-loop.md b/docs/context-window-overflow-tool-loop.md
+new file mode 100644
+index 00000000..39a4e6bd
+--- /dev/null
++++ b/docs/context-window-overflow-tool-loop.md
+@@ -0,0 +1,39 @@
++# Context Window Overflow in Tool Loop
++
++**Date**: 2026-03-06
++**Status**: Fix in progress
++**Severity**: High — causes API errors and potential OOM
++
++## Problem
++
++When the agent enters a tool loop (file_read, shell, etc.), tool results accumulate in the message history without any token budget checking. A single large tool output can blow past the 200k context window.
++
++**Real example**: 653,513 tokens sent to API after just 7 tool iterations, resulting in an API rejection.
++
++## Root Causes
++
++### 1. No mid-loop history trimming
++`trim_channel_prompt_history()` in `src/channels/mod.rs` runs once before the first LLM call but is **not** called during tool loop iterations in `src/agent/loop_.rs`. Each tool result gets appended to `history` and the accumulated total is never checked.
++
++### 2. Shell output cap is too large
++`MAX_OUTPUT_BYTES` in `src/tools/shell.rs` is set to 1MB (1,048,576 bytes). At ~3.3 bytes/token, that's ~330k tokens from a **single** shell call — exceeding the entire 200k context window by itself.
++
++### 3. File read has no output truncation
++`src/tools/file_read.rs` has a 10MB file size limit (`MAX_FILE_SIZE_BYTES`) but no output truncation. A 5MB text file would produce ~1.7M tokens of output, all of which goes straight into the message history.
++
++## Fix Approach
++
++### Fix A: Reduce tool output limits
++- **Shell**: Reduce `MAX_OUTPUT_BYTES` from 1MB to 100KB (102,400 bytes). This gives ~34k tokens max per shell call — reasonable for a 200k context window.
++- **File read**: Add output truncation at 100KB. If the formatted output exceeds 100KB, truncate with a message suggesting `offset`/`limit` parameters.
++
++### Fix B: Pre-flight token budget check in tool loop
++In `src/agent/loop_.rs`, before each LLM call in the tool loop, estimate total tokens of accumulated messages. If it exceeds a safety threshold (150k tokens for a 200k context model), truncate the oldest tool results by replacing their content with `[truncated — output too large]`.
++
++Reuses the token estimation approach from `estimated_message_tokens()` / `estimated_history_tokens()` in `src/channels/mod.rs`.
++
++## Upstream Status
++
++- No fix exists in `zeroclaw-labs/zeroclaw` as of 2026-03-06
++- PR #2808 adds loop detection but does **not** address context window overflow from large tool outputs
++- This is a Snowclaw-only fix; may propose upstream later
+diff --git a/src/agent/agent.rs b/src/agent/agent.rs
+index 25bc30e0..14433ea9 100644
+--- a/src/agent/agent.rs
++++ b/src/agent/agent.rs
+@@ -301,7 +301,7 @@ impl Agent {
+             None
+         };
+ 
+-        let mut tools = tools::all_tools_with_runtime(
++        let tools = tools::all_tools_with_runtime(
+             Arc::new(config.clone()),
+             &security,
+             runtime,
+@@ -316,7 +316,7 @@ impl Agent {
+             config.api_key.as_deref(),
+             config,
+         );
+-        let (tools, tool_filter_report) = tools::filter_primary_agent_tools(
++        let (mut tools, tool_filter_report) = tools::filter_primary_agent_tools(
+             tools,
+             &config.agent.allowed_tools,
+             &config.agent.denied_tools,
+diff --git a/src/agent/loop_.rs b/src/agent/loop_.rs
+index 07fd02fa..93d79534 100644
+--- a/src/agent/loop_.rs
++++ b/src/agent/loop_.rs
+@@ -80,6 +80,51 @@ const CANARY_EXFILTRATION_BLOCK_MESSAGE: &str =
+ /// Matches the channel-side constant in `channels/mod.rs`.
+ const AUTOSAVE_MIN_MESSAGE_CHARS: usize = 20;
+ 
++/// Safety token budget for the tool loop.  When accumulated history exceeds
++/// this estimate, the oldest non-system tool results are truncated to avoid
++/// blowing past the model context window (typically 200k tokens).
++const TOOL_LOOP_TOKEN_BUDGET: usize = 150_000;
++
++/// Rough token estimate for a chat message (~3 chars per token + 4 overhead).
++fn estimate_message_tokens(msg: &ChatMessage) -> usize {
++    (msg.content.chars().count().saturating_add(2) / 3).saturating_add(4)
++}
++
++/// Estimate total tokens across a message history.
++fn estimate_history_tokens(history: &[ChatMessage]) -> usize {
++    history.iter().map(estimate_message_tokens).sum()
++}
++
++/// Trim oversized tool results in-place when the history exceeds the token
++/// budget.  Replaces the content of the oldest tool/user-tool-result messages
++/// with a short placeholder, preserving system and regular user messages.
++fn trim_tool_results_for_budget(history: &mut [ChatMessage]) {
++    let mut total = estimate_history_tokens(history);
++    if total <= TOOL_LOOP_TOKEN_BUDGET {
++        return;
++    }
++
++    // Walk forward (oldest first), skipping system messages and the last 2
++    // messages (the most recent assistant + tool result pair).
++    let safe_end = history.len().saturating_sub(2);
++    for msg in history[..safe_end].iter_mut() {
++        if total <= TOOL_LOOP_TOKEN_BUDGET {
++            break;
++        }
++        // Only truncate tool results (role "tool") and user-wrapped tool
++        // results (role "user" with "[Tool results]" prefix).
++        let is_tool_result = msg.role == "tool"
++            || (msg.role == "user" && msg.content.starts_with("[Tool results]"));
++        if !is_tool_result {
++            continue;
++        }
++        let old_tokens = estimate_message_tokens(msg);
++        msg.content = "[truncated — output too large for context window]".to_string();
++        let new_tokens = estimate_message_tokens(msg);
++        total = total.saturating_sub(old_tokens).saturating_add(new_tokens);
++    }
++}
++
+ fn filter_primary_agent_tools_or_fail(
+     config: &Config,
+     tools_registry: Vec<Box<dyn Tool>>,
+@@ -1261,6 +1306,11 @@ pub async fn run_tool_call_loop(
+             return Err(ToolLoopCancelled.into());
+         }
+ 
++        // ── Pre-flight token budget check ────────────────────────
++        // Truncate oversized old tool results so accumulated history doesn't
++        // blow past the model context window.
++        trim_tool_results_for_budget(history);
++
+         let image_marker_count = multimodal::count_image_markers(history);
+         let provider_supports_vision =
+             should_treat_provider_as_vision_capable(provider_name, provider);
+diff --git a/src/integrations/registry.rs b/src/integrations/registry.rs
+index 77b7e79a..7bbcd1ab 100644
+--- a/src/integrations/registry.rs
++++ b/src/integrations/registry.rs
+@@ -1153,9 +1153,17 @@ mod tests {
+     fn nostr_active_when_configured() {
+         let mut config = Config::default();
+         config.channels_config.nostr = Some(NostrConfig {
+-            private_key: "nsec1example".into(),
++            nsec: Some("nsec1example".into()),
+             relays: vec!["wss://relay.example.com".into()],
+             allowed_pubkeys: vec!["*".into()],
++            owner: None,
++            groups: vec![],
++            respond_mode: "always".into(),
++            group_respond_mode: std::collections::HashMap::new(),
++            mention_names: vec![],
++            listen_dms: true,
++            context_history: 5,
++            extra_kinds: vec![],
+         });
+         let entries = all_integrations();
+         let nostr = entries.iter().find(|e| e.name == "Nostr").unwrap();
+diff --git a/src/tools/file_read.rs b/src/tools/file_read.rs
+index a7597d20..036c5351 100644
+--- a/src/tools/file_read.rs
++++ b/src/tools/file_read.rs
+@@ -9,6 +9,10 @@ use std::sync::Arc;
+ 
+ const MAX_FILE_SIZE_BYTES: u64 = 10 * 1024 * 1024;
+ 
++/// Maximum tool output size in bytes (100KB).
++/// Prevents a single file_read from blowing past the LLM context window budget.
++const MAX_OUTPUT_BYTES: usize = 102_400;
++
+ fn sensitive_file_block_message(path: &str) -> String {
+     format!(
+         "Reading sensitive file '{path}' is blocked by policy. \
+@@ -228,9 +232,21 @@ impl Tool for FileReadTool {
+                     format!("\n[{total} lines total]")
+                 };
+ 
++                let mut output = format!("{numbered}{summary}");
++                if output.len() > MAX_OUTPUT_BYTES {
++                    output.truncate(MAX_OUTPUT_BYTES);
++                    // Ensure we don't cut mid-char
++                    while !output.is_char_boundary(output.len()) {
++                        output.pop();
++                    }
++                    output.push_str(
++                        "\n... [output truncated at 100KB, use offset/limit for more]",
++                    );
++                }
++
+                 Ok(ToolResult {
+                     success: true,
+-                    output: format!("{numbered}{summary}"),
++                    output,
+                     error: None,
+                 })
+             }
+@@ -240,7 +256,16 @@ impl Tool for FileReadTool {
+                     .await
+                     .map_err(|e| anyhow::anyhow!("Failed to read file: {e}"))?;
+ 
+-                if let Some(text) = try_extract_pdf_text(&bytes) {
++                if let Some(mut text) = try_extract_pdf_text(&bytes) {
++                    if text.len() > MAX_OUTPUT_BYTES {
++                        text.truncate(MAX_OUTPUT_BYTES);
++                        while !text.is_char_boundary(text.len()) {
++                            text.pop();
++                        }
++                        text.push_str(
++                            "\n... [output truncated at 100KB]",
++                        );
++                    }
+                     return Ok(ToolResult {
+                         success: true,
+                         output: text,
+@@ -249,7 +274,16 @@ impl Tool for FileReadTool {
+                 }
+ 
+                 // Lossy fallback — replaces invalid bytes with U+FFFD
+-                let lossy = String::from_utf8_lossy(&bytes).into_owned();
++                let mut lossy = String::from_utf8_lossy(&bytes).into_owned();
++                if lossy.len() > MAX_OUTPUT_BYTES {
++                    lossy.truncate(MAX_OUTPUT_BYTES);
++                    while !lossy.is_char_boundary(lossy.len()) {
++                        lossy.pop();
++                    }
++                    lossy.push_str(
++                        "\n... [output truncated at 100KB, use offset/limit for more]",
++                    );
++                }
+                 Ok(ToolResult {
+                     success: true,
+                     output: lossy,
+diff --git a/src/tools/shell.rs b/src/tools/shell.rs
+index 8ba93519..54f726e0 100644
+--- a/src/tools/shell.rs
++++ b/src/tools/shell.rs
+@@ -10,8 +10,10 @@ use std::time::Duration;
+ 
+ /// Maximum shell command execution time before kill.
+ const SHELL_TIMEOUT_SECS: u64 = 60;
+-/// Maximum output size in bytes (1MB).
+-const MAX_OUTPUT_BYTES: usize = 1_048_576;
++/// Maximum output size in bytes (100KB).
++/// Kept well under the LLM context window budget (~34k tokens at ~3 bytes/token)
++/// to prevent a single shell call from blowing past the 200k-token context limit.
++const MAX_OUTPUT_BYTES: usize = 102_400;
+ /// Environment variables safe to pass to shell commands.
+ /// Only functional variables are included — never API keys or secrets.
+ const SAFE_ENV_VARS: &[&str] = &[
+@@ -243,11 +245,11 @@ impl Tool for ShellTool {
+                 // Truncate output to prevent OOM
+                 if stdout.len() > MAX_OUTPUT_BYTES {
+                     truncate_utf8_to_max_bytes(&mut stdout, MAX_OUTPUT_BYTES);
+-                    stdout.push_str("\n... [output truncated at 1MB]");
++                    stdout.push_str("\n... [output truncated at 100KB]");
+                 }
+                 if stderr.len() > MAX_OUTPUT_BYTES {
+                     truncate_utf8_to_max_bytes(&mut stderr, MAX_OUTPUT_BYTES);
+-                    stderr.push_str("\n... [stderr truncated at 1MB]");
++                    stderr.push_str("\n... [stderr truncated at 100KB]");
+                 }
+ 
+                 if let Some(detector) = &self.syscall_detector {
+@@ -687,10 +689,10 @@ mod tests {
+     }
+ 
+     #[test]
+-    fn shell_output_limit_is_1mb() {
++    fn shell_output_limit_is_100kb() {
+         assert_eq!(
+-            MAX_OUTPUT_BYTES, 1_048_576,
+-            "max output must be 1 MB to prevent OOM"
++            MAX_OUTPUT_BYTES, 102_400,
++            "max output must be 100 KB to stay within LLM context budget"
+         );
+     }
+ 
+-- 
+2.52.0
+

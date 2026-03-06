@@ -1,12 +1,10 @@
 # ❄️ Snowclaw
 
-Nostr-native AI assistant built on [ZeroClaw](https://github.com/zeroclaw-labs/zeroclaw). Extends it with first-class Nostr protocol support, collective memory, and decentralized identity — turning a general-purpose AI assistant into one that lives natively on the Nostr network.
-
-→ [Manifesto](docs/MANIFESTO.md) · [Collective Memory Design](docs/collective-memory.md) · [Snow UI Design](docs/snow-ui.md)
+Nostr-native AI assistant built on [ZeroClaw](https://github.com/zeroclaw-labs/zeroclaw). Snowclaw adds first-class Nostr support and uses **Nomen** as its primary memory backend.
 
 ## What Snowclaw Adds
 
-### 🌐 Native Nostr Channel (~2400 LOC)
+### 🌐 Native Nostr Channel
 Full NIP-29 group chat support as a first-class channel — not a bridge, not a webhook, a native integration:
 - **NIP-04 & NIP-17 DMs** — dual-protocol direct messages with automatic protocol detection
 - **NIP-29 group chat** — relay-based group conversations with mention gating
@@ -15,17 +13,19 @@ Full NIP-29 group chat support as a first-class channel — not a bridge, not a 
 - **Event deduplication** — LRU cache preventing duplicate processing
 - **Seen events persistence** — SQLite-backed event tracking across restarts
 
-### 🧠 Social Memory System
-Per-npub memory that builds understanding of people over time:
-- **Social profiles** (`memory/social.rs`, ~950 LOC) — per-pubkey metadata, interaction history, relationship context
-- **Nostr-native persistence** — memories stored as NIP-78 events on relays, optionally encrypted with NIP-44
-- **Encrypted semantic search** — vector embeddings + keyword search over NIP-44 encrypted memory events
-- **SQLite local cache** (`memory/nostr_sqlite.rs`) — fast local storage synced with relay
-- **Unified search** (`memory/unified_search.rs`) — hybrid vector + keyword search across all memory backends
-- **Document indexing** (`memory/doc_index.rs`, `memory/file_indexer.rs`) — file and message indexing for RAG
-- **Embeddings** (`memory/vector.rs`, `memory/embeddings.rs`) — vector similarity search for semantic recall
+### 🧠 Memory via Nomen
+Snowclaw uses **Nomen** for agent memory, with two transport modes:
+- **Socket transport** (default) — `src/memory/nomen_socket.rs` — communicates with a running Nomen daemon over Unix domain socket via `nomen-wire` protocol (~0.2ms latency, bidirectional, supports push events)
+- **Direct library** (fallback) — `src/memory/nomen_adapter.rs` — embeds Nomen directly via `nomen` crate (0ms latency, no push events, tighter coupling)
+- **Visibility/scope mapping** — `src/memory/nomen_policy.rs`
+- **Runtime memory context** — `src/memory/runtime_context.rs`
+- **Migration from legacy Snowclaw memory** — `src/memory/nomen_migrate.rs`
 
-### 🔧 Nostr Core Library (`crates/nostr-core/`, ~2000 LOC)
+Transport is selected automatically by config: when `[memory] socket_path` is set (default: `$XDG_RUNTIME_DIR/nomen/nomen.sock`), socket transport is used. Set `socket_path = ""` to force direct library mode.
+
+Legacy/compatibility memory code still exists in the tree, but it is not the main Snowclaw memory story anymore.
+
+### 🔧 Nostr Core Library (`crates/nostr-core/`)
 Extracted shared Nostr protocol primitives:
 - Key filtering and content sanitization (redacts nsec before LLM)
 - Mention detection (npub, hex, NIP-05, @name, broadcast)
@@ -41,35 +41,31 @@ Extracted shared Nostr protocol primitives:
 
 ### 🛠️ Additional Tools
 - **Nostr task management** — create and track tasks in group contexts
-- **Social search** — search across social memory by npub, group, or content
 - **Agent lessons** — self-improving knowledge base from interactions
 - **Enhanced browser automation** — extended browser tool capabilities
-- **Security key filtering** (`security/key_filter.rs`) — pubkey-based access control
+- **Security key filtering** (`src/security/key_filter.rs`) — pubkey-based access control
 
 ### 📋 CLI Extensions
 - `snowclaw nostr` — relay management, group listing, message sending
-- `snowclaw memory` — memory search, inspect, and management
+- `snowclaw memory` — memory search, inspect, and migration workflows
 - `snowclaw tasks` — Nostr-native task tracking
 
 ## Architecture
 
 ```
 snowclaw (binary)
-├── src/                         # Fork of zeroclaw + Snowclaw additions
+├── src/                         # Main application code: upstream ZeroClaw base + Snowclaw extensions
 │   ├── channels/
 │   │   ├── nostr.rs             # Native Nostr channel (NIP-04/17/29/42)
-│   │   └── nostr_memory.rs      # Nostr-specific memory layer
+│   │   └── nostr_memory.rs      # Nostr social/context layer and legacy compatibility code
 │   ├── memory/
-│   │   ├── social.rs            # Per-npub social memory
-│   │   ├── nostr.rs             # NIP-78 relay persistence
-│   │   ├── nostr_sqlite.rs      # Local SQLite cache
-│   │   ├── vector.rs            # Vector similarity search
-│   │   ├── unified_search.rs    # Hybrid search orchestrator
-│   │   ├── doc_index.rs         # Document indexing
-│   │   └── embeddings.rs        # Embedding generation
+│   │   ├── nomen_socket.rs      # Socket transport (nomen-wire over UDS, default)
+│   │   ├── nomen_adapter.rs     # Direct library transport (fallback)
+│   │   ├── nomen_policy.rs      # Visibility/scope compatibility mapping
+│   │   ├── runtime_context.rs   # Canonical runtime memory context
+│   │   └── nomen_migrate.rs     # Migration from legacy memory into Nomen
 │   ├── tools/
 │   │   ├── nostr_tasks.rs       # Nostr task management
-│   │   ├── social_search.rs     # Social memory search
 │   │   └── agent_lesson.rs      # Self-improving knowledge
 │   ├── stats/                   # Cost tracking & TUI
 │   └── security/key_filter.rs   # Pubkey-based access control
@@ -93,21 +89,11 @@ cp config.example.toml ~/.snowclaw/config.toml
 
 ## Configuration
 
-Snowclaw uses `~/.snowclaw/config.toml`. Key sections beyond upstream ZeroClaw:
+Snowclaw uses `~/.snowclaw/config.toml`. The exact memory configuration is still evolving, but the important current distinction is:
 
-```toml
-[nostr]
-secret_key = "nsec1..."
-relays = ["wss://relay.example.com"]
-
-[nostr.groups.mygroup]
-group_id = "my-group"
-respond_mode = "mention"  # "all" | "mention" | "owner" | "none"
-allowed_pubkeys = ["npub1..."]
-
-[memory]
-encrypted_memory = true  # NIP-44 encryption for relay-stored memory
-```
+- **Nostr channel/config** lives in Snowclaw config
+- **Agent memory** is backed by **Nomen**
+- Legacy Snowclaw memory backends and migration code still exist for compatibility
 
 ## Relationship to ZeroClaw
 
@@ -116,20 +102,16 @@ Snowclaw is a **fork** that tracks upstream ZeroClaw via periodic rebases. All u
 - **Upstream:** [zeroclaw-labs/zeroclaw](https://github.com/zeroclaw-labs/zeroclaw)
 - **Fork:** [k0sti/snowclaw](https://github.com/k0sti/snowclaw)
 
-## Vision: Collective Memory
+## Memory Direction
 
-Every Snowclaw instance learns. The good ones share what they learn — as signed Nostr events. The network gets smarter together.
+Snowclaw's memory direction is intentionally simpler now:
+- Snowclaw handles the Nostr-native agent/runtime side
+- **Nomen** handles the primary memory backend, accessed via Unix domain socket (IPC)
+- Socket transport decouples Snowclaw from Nomen's internals — Nomen can be upgraded, restarted, or shared between agents independently
+- Direct library fallback remains available for single-process deployments
+- Older collective/social memory components remain in the repo mainly for compatibility, migration, or transitional use
 
-Memory is a graph, not a tree. Events link via `supersedes` chains, topic tags, and source relationships. Agents self-report their backing LLM, and a configurable trust ranking handles quality differences across the network.
-
-Three tiers: **public** (open relays), **group** (access-controlled or NIP-44 encrypted), **private** (agent↔human, always encrypted). Knowledge flows upward with consent, never automatically.
-
-**Snow UI** — a Rust/WASM + TypeScript web app (using [applesauce](https://github.com/hzrd149/applesauce) for Nostr plumbing) for inspecting memories, debugging search ranking, and configuring trust. Built early to aid development.
-
-See the design docs:
-- [Manifesto](docs/MANIFESTO.md) — why Snowclaw exists
-- [Collective Memory](docs/collective-memory.md) — memory tiers, quality ranking, conflict resolution
-- [Snow UI](docs/snow-ui.md) — web UI architecture and components
+So Snowclaw should not be read as exposing a separate graph-memory product of its own. If richer internal memory structures exist underneath, they belong to Nomen rather than Snowclaw's public surface.
 
 ## License
 

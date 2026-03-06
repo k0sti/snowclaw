@@ -159,7 +159,9 @@ mod heartbeat;
 mod hooks;
 mod identity;
 mod integrations;
+mod mcp;
 mod memory;
+mod memory_cli;
 mod migration;
 mod multimodal;
 mod observability;
@@ -171,13 +173,11 @@ mod rag;
 mod runtime;
 mod security;
 mod service;
-mod stats;
-mod memory_cli;
 mod skillforge;
-mod mcp;
 mod skills;
-mod task_cli;
 mod snowclaw_cli;
+mod stats;
+mod task_cli;
 #[cfg(test)]
 mod test_locks;
 mod tools;
@@ -974,6 +974,12 @@ enum MemoryCommands {
         /// Show progress during reindex
         #[arg(long, default_value = "true")]
         progress: bool,
+    },
+    /// Migrate legacy SQLite memories to Nomen (kind 31234)
+    MigrateToNomen {
+        /// Preview what would be migrated without writing anything
+        #[arg(long)]
+        dry_run: bool,
     },
 }
 

@@ -1,0 +1,181 @@
+From 462f96adf02874356ab15e3ac914bd00a0d58ebd Mon Sep 17 00:00:00 2001
+From: kosti <koshdot@proton.me>
+Date: Sun, 8 Mar 2026 00:15:44 +0200
+Subject: [PATCH 04/13] fix: wire config passthrough, signer, and relay for
+ Nomen backend
+
+- nomen_signer.rs: thin bridge to Nomen's KeysSigner via config
+- nomen_adapter.rs: lazy init with relay when available, fix store mapping
+- mod.rs: factory builds proper Nomen config from Snowclaw's MemoryConfig
+- Remove phantom snowclaw_adapter.rs from Nomen architecture doc
+---
+ src/memory/mod.rs           | 36 +++++++++++++++++++++++++++++++++++-
+ src/memory/nomen_adapter.rs | 36 ++++++++++++++++++++++++++++++++----
+ src/memory/nomen_signer.rs  | 28 ++++++++++++++++++++++++++++
+ 3 files changed, 95 insertions(+), 5 deletions(-)
+ create mode 100644 src/memory/nomen_signer.rs
+
+diff --git a/src/memory/mod.rs b/src/memory/mod.rs
+index 7ebe13c1..a9820d16 100644
+--- a/src/memory/mod.rs
++++ b/src/memory/mod.rs
+@@ -14,6 +14,7 @@ pub mod markdown;
+ pub mod message_index;
+ pub mod nomen_adapter;
+ pub mod nomen_migrate;
++pub mod nomen_signer;
+ pub mod contextvm_bridge;
+ pub mod none;
+ pub mod nostr;
+@@ -434,7 +435,40 @@ pub fn create_memory_with_storage_and_routes(
+ 
+     // Nomen backend: Nostr-native agent memory (SurrealDB + vector search + relay sync).
+     if matches!(snowclaw_backends::classify(&backend_name), snowclaw_backends::SnowclawBackendKind::Nomen) {
+-        let mem = NomenMemory::new(nomen::config::Config::default());
++        let nsec = config.nsec.clone().or_else(|| std::env::var("SNOWCLAW_NSEC").ok());
++        let relay_url = config.local_relay.clone();
++
++        // Map Snowclaw embedding config to Nomen's EmbeddingConfig.
++        let embedding = if resolved_embedding.provider != "none" {
++            // Nomen reads API key from env var. Set a dedicated env var with the
++            // resolved key so Nomen's embedder can pick it up.
++            let api_key_env = "_NOMEN_EMBED_KEY";
++            if let Some(ref key) = resolved_embedding.api_key {
++                std::env::set_var(api_key_env, key);
++            }
++            let (provider, base_url) = match resolved_embedding.provider.strip_prefix("custom:") {
++                Some(url) => ("openai".to_string(), Some(url.to_string())),
++                None => (resolved_embedding.provider.clone(), None),
++            };
++            Some(nomen::config::EmbeddingConfig {
++                provider,
++                model: resolved_embedding.model.clone(),
++                api_key_env: api_key_env.to_string(),
++                base_url,
++                dimensions: resolved_embedding.dimensions,
++                ..Default::default()
++            })
++        } else {
++            None
++        };
++
++        let nomen_config = nomen::config::Config {
++            relay: relay_url,
++            nsec,
++            embedding,
++            ..Default::default()
++        };
++        let mem = NomenMemory::new(nomen_config);
+         return Ok(Box::new(mem));
+     }
+ 
+diff --git a/src/memory/nomen_adapter.rs b/src/memory/nomen_adapter.rs
+index 4b42b7fc..9e0b798d 100644
+--- a/src/memory/nomen_adapter.rs
++++ b/src/memory/nomen_adapter.rs
+@@ -17,7 +17,8 @@ pub struct NomenMemory {
+ impl NomenMemory {
+     /// Create a new NomenMemory adapter.
+     ///
+-    /// Initialization is lazy — the SurrealDB instance is created on first use.
++    /// Initialization is lazy — the SurrealDB instance and optional relay
++    /// connection are established on first use.
+     pub fn new(config: nomen::config::Config) -> Self {
+         Self {
+             config,
+@@ -26,9 +27,36 @@ impl NomenMemory {
+     }
+ 
+     /// Get or initialize the Nomen instance.
++    ///
++    /// When nsec and relay URL are configured, connects to the relay for
++    /// bidirectional sync. Otherwise, operates in local-only mode.
+     async fn nomen(&self) -> anyhow::Result<&nomen::Nomen> {
+         self.nomen
+-            .get_or_try_init(|| async { nomen::Nomen::open(&self.config).await })
++            .get_or_try_init(|| async {
++                let signer = self.config.build_signer();
++                let relay_url = self.config.relay.as_deref()
++                    .filter(|u| !u.trim().is_empty());
++
++                match (signer, relay_url) {
++                    (Some(signer), Some(url)) => {
++                        let relay_config = nomen::relay::RelayConfig {
++                            relay_url: url.to_string(),
++                            ..Default::default()
++                        };
++                        let relay = nomen::relay::RelayManager::new(signer, relay_config);
++                        if let Err(e) = relay.connect().await {
++                            tracing::warn!("Nomen relay connect failed, continuing local-only: {e}");
++                            return nomen::Nomen::open(&self.config).await;
++                        }
++                        tracing::info!("Nomen memory connected to relay: {url}");
++                        nomen::Nomen::open_with_relay(&self.config, relay).await
++                    }
++                    _ => {
++                        tracing::info!("Nomen memory in local-only mode (no nsec or relay configured)");
++                        nomen::Nomen::open(&self.config).await
++                    }
++                }
++            })
+             .await
+     }
+ }
+@@ -100,10 +128,11 @@ impl Memory for NomenMemory {
+         _session_id: Option<&str>,
+     ) -> anyhow::Result<()> {
+         let nomen = self.nomen().await?;
++        let summary: String = content.lines().next().unwrap_or(content).chars().take(200).collect();
+         nomen
+             .store(nomen::NewMemory {
+                 topic: key.to_string(),
+-                summary: content.to_string(),
++                summary,
+                 detail: content.to_string(),
+                 tier: category_to_tier(&category),
+                 confidence: 0.8,
+@@ -152,7 +181,6 @@ impl Memory for NomenMemory {
+ 
+     async fn forget(&self, key: &str) -> anyhow::Result<bool> {
+         let nomen = self.nomen().await?;
+-        // Check if memory exists before deleting.
+         let exists = nomen.get_by_topic(key).await?.is_some();
+         if exists {
+             nomen.delete(Some(key), None).await?;
+diff --git a/src/memory/nomen_signer.rs b/src/memory/nomen_signer.rs
+new file mode 100644
+index 00000000..65121db0
+--- /dev/null
++++ b/src/memory/nomen_signer.rs
+@@ -0,0 +1,28 @@
++//! Nomen signer bridge: builds a [`NomenSigner`] from Snowclaw's key config.
++//!
++//! Snowclaw stores nsec keys encrypted in config (ChaCha20-Poly1305) with env
++//! var fallback (`SNOWCLAW_NSEC`). This module bridges that to Nomen's signer
++//! trait using Nomen's built-in [`KeysSigner`], which uses nostr-sdk 0.39 types
++//! internally (matching Nomen's dependency).
++
++use std::sync::Arc;
++
++/// Build a [`nomen::signer::NomenSigner`] from an nsec string.
++///
++/// The nsec is parsed using Nomen's nostr-sdk 0.39 `Keys::parse()`, which
++/// accepts both `nsec1...` (Bech32) and hex formats.
++///
++/// Returns `None` if the nsec is empty or unparseable.
++pub fn build_signer(nsec: &str) -> Option<Arc<dyn nomen::signer::NomenSigner>> {
++    if nsec.trim().is_empty() {
++        return None;
++    }
++    // Delegate to Nomen's Config::build_signer() by constructing a minimal config.
++    // This ensures we use Nomen's nostr-sdk 0.39 types for key parsing, avoiding
++    // version mismatch with Snowclaw's nostr-sdk 0.44.
++    let config = nomen::config::Config {
++        nsec: Some(nsec.to_string()),
++        ..Default::default()
++    };
++    config.build_signer()
++}
+-- 
+2.52.0
+

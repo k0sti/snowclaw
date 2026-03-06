@@ -155,11 +155,7 @@ mod tests {
         write_file(dir.path(), "notes.txt", "Some text notes here.");
 
         let conn = test_conn();
-        let indexer = FileIndexer::new(
-            conn.clone(),
-            dir.path(),
-            vec!["*.md".to_string()],
-        );
+        let indexer = FileIndexer::new(conn.clone(), dir.path(), vec!["*.md".to_string()]);
 
         let chunks = indexer.index_configured_files().unwrap();
         assert!(chunks >= 1);
@@ -181,14 +177,14 @@ mod tests {
         let dir = TempDir::new().unwrap();
         write_file(dir.path(), "rooms/general.md", "General room discussion.");
         write_file(dir.path(), "rooms/dev.md", "Development room notes.");
-        write_file(dir.path(), "other.md", "Unrelated file with unique xyzzy content.");
+        write_file(
+            dir.path(),
+            "other.md",
+            "Unrelated file with unique xyzzy content.",
+        );
 
         let conn = test_conn();
-        let indexer = FileIndexer::new(
-            conn.clone(),
-            dir.path(),
-            vec!["rooms/*.md".to_string()],
-        );
+        let indexer = FileIndexer::new(conn.clone(), dir.path(), vec!["rooms/*.md".to_string()]);
 
         let chunks = indexer.index_configured_files().unwrap();
         assert!(chunks >= 2);
@@ -208,11 +204,7 @@ mod tests {
         write_file(dir.path(), "test.md", "Stable content here.");
 
         let conn = test_conn();
-        let indexer = FileIndexer::new(
-            conn.clone(),
-            dir.path(),
-            vec!["*.md".to_string()],
-        );
+        let indexer = FileIndexer::new(conn.clone(), dir.path(), vec!["*.md".to_string()]);
 
         let chunks1 = indexer.index_configured_files().unwrap();
         assert_eq!(chunks1, 1);
@@ -228,11 +220,7 @@ mod tests {
         let path = write_file(dir.path(), "test.md", "Original content here.");
 
         let conn = test_conn();
-        let indexer = FileIndexer::new(
-            conn.clone(),
-            dir.path(),
-            vec!["*.md".to_string()],
-        );
+        let indexer = FileIndexer::new(conn.clone(), dir.path(), vec!["*.md".to_string()]);
 
         indexer.index_configured_files().unwrap();
 
@@ -250,11 +238,7 @@ mod tests {
     fn invalid_pattern_logged_not_fatal() {
         let dir = TempDir::new().unwrap();
         let conn = test_conn();
-        let indexer = FileIndexer::new(
-            conn.clone(),
-            dir.path(),
-            vec!["[invalid".to_string()],
-        );
+        let indexer = FileIndexer::new(conn.clone(), dir.path(), vec!["[invalid".to_string()]);
 
         // Should not error, just log warning
         let chunks = indexer.index_configured_files().unwrap();
@@ -265,11 +249,7 @@ mod tests {
     fn no_matching_files_returns_zero() {
         let dir = TempDir::new().unwrap();
         let conn = test_conn();
-        let indexer = FileIndexer::new(
-            conn.clone(),
-            dir.path(),
-            vec!["*.xyz".to_string()],
-        );
+        let indexer = FileIndexer::new(conn.clone(), dir.path(), vec!["*.xyz".to_string()]);
 
         let chunks = indexer.index_configured_files().unwrap();
         assert_eq!(chunks, 0);

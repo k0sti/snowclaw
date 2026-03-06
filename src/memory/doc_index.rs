@@ -110,11 +110,7 @@ const CHUNK_MAX_TOKENS: usize = 512;
 ///
 /// Uses hash-based change detection: if the file's content hash matches
 /// the stored hash, indexing is skipped. Returns the number of chunks indexed.
-pub fn index_file(
-    conn: &Connection,
-    path: &Path,
-    category: &str,
-) -> Result<usize> {
+pub fn index_file(conn: &Connection, path: &Path, category: &str) -> Result<usize> {
     let path_str = path.to_string_lossy().to_string();
     let content = std::fs::read_to_string(path)
         .with_context(|| format!("failed to read file: {}", path_str))?;
@@ -154,7 +150,15 @@ pub fn index_file(
         conn.execute(
             "INSERT INTO indexed_docs (id, path, chunk_index, content, category, updated_at, hash)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![id, path_str, chunk.index, chunk.content, category, now, hash],
+            params![
+                id,
+                path_str,
+                chunk.index,
+                chunk.content,
+                category,
+                now,
+                hash
+            ],
         )?;
     }
 
@@ -201,7 +205,15 @@ pub fn index_content(
         conn.execute(
             "INSERT INTO indexed_docs (id, path, chunk_index, content, category, updated_at, hash)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![id, virtual_path, chunk.index, chunk.content, category, now, hash],
+            params![
+                id,
+                virtual_path,
+                chunk.index,
+                chunk.content,
+                category,
+                now,
+                hash
+            ],
         )?;
     }
 
@@ -216,19 +228,12 @@ pub fn unindex_file(conn: &Connection, path: &Path) -> Result<()> {
 
 /// Remove all chunks for a given path string.
 fn unindex_path(conn: &Connection, path: &str) -> Result<()> {
-    conn.execute(
-        "DELETE FROM indexed_docs WHERE path = ?1",
-        params![path],
-    )?;
+    conn.execute("DELETE FROM indexed_docs WHERE path = ?1", params![path])?;
     Ok(())
 }
 
 /// Search documents using FTS5.
-pub fn search_docs(
-    conn: &Connection,
-    query: &str,
-    limit: usize,
-) -> Result<Vec<DocHit>> {
+pub fn search_docs(conn: &Connection, query: &str, limit: usize) -> Result<Vec<DocHit>> {
     if query.trim().is_empty() {
         return Ok(Vec::new());
     }
@@ -280,8 +285,7 @@ pub fn search_docs(
 
 /// Count total indexed document chunks.
 pub fn count_docs(conn: &Connection) -> Result<usize> {
-    let count: i64 =
-        conn.query_row("SELECT COUNT(*) FROM indexed_docs", [], |row| row.get(0))?;
+    let count: i64 = conn.query_row("SELECT COUNT(*) FROM indexed_docs", [], |row| row.get(0))?;
     #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
     Ok(count as usize)
 }
@@ -447,8 +451,13 @@ mod tests {
     #[test]
     fn index_content_works() {
         let conn = test_conn();
-        let chunks = index_content(&conn, "virtual://room/test", "Room description here", "room")
-            .unwrap();
+        let chunks = index_content(
+            &conn,
+            "virtual://room/test",
+            "Room description here",
+            "room",
+        )
+        .unwrap();
         assert_eq!(chunks, 1);
 
         let results = search_docs(&conn, "Room description", 10).unwrap();
@@ -476,7 +485,11 @@ mod tests {
     fn search_finds_content() {
         let conn = test_conn();
         let dir = TempDir::new().unwrap();
-        let path = write_temp_file(dir.path(), "rust.md", "Rust is a systems programming language");
+        let path = write_temp_file(
+            dir.path(),
+            "rust.md",
+            "Rust is a systems programming language",
+        );
         index_file(&conn, &path, "document").unwrap();
 
         let results = search_docs(&conn, "Rust programming", 10).unwrap();

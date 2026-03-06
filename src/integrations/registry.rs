@@ -1153,9 +1153,17 @@ mod tests {
     fn nostr_active_when_configured() {
         let mut config = Config::default();
         config.channels_config.nostr = Some(NostrConfig {
-            private_key: "nsec1example".into(),
+            nsec: Some("nsec1example".into()),
             relays: vec!["wss://relay.example.com".into()],
             allowed_pubkeys: vec!["*".into()],
+            owner: None,
+            groups: vec![],
+            respond_mode: "always".into(),
+            group_respond_mode: std::collections::HashMap::new(),
+            mention_names: vec![],
+            listen_dms: true,
+            context_history: 5,
+            extra_kinds: vec![],
         });
         let entries = all_integrations();
         let nostr = entries.iter().find(|e| e.name == "Nostr").unwrap();

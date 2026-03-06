@@ -65,13 +65,12 @@ fn scope_to_tier_unscoped_defaults_to_public() {
 
 fn test_config() -> zeroclaw::config::snowclaw_schema::CollectiveMemoryConfig {
     let mut cfg = zeroclaw::config::snowclaw_schema::CollectiveMemoryConfig::default();
-    cfg.source_preferences.push(
-        zeroclaw::config::snowclaw_schema::CollectiveSourceEntry {
+    cfg.source_preferences
+        .push(zeroclaw::config::snowclaw_schema::CollectiveSourceEntry {
             npub: Some("self".to_string()),
             group: None,
             trust: 1.0,
-        },
-    );
+        });
     cfg
 }
 
@@ -81,19 +80,38 @@ async fn recall_without_context_returns_all_tiers() {
     let mem = CollectiveMemory::new_in_memory(&cfg).unwrap();
 
     // Store memories with a common keyword for FTS matching
-    mem.store("core:fact", "Snowclaw tier test public", MemoryCategory::Core, None)
-        .await
-        .unwrap();
-    mem.store("pref:lang", "Snowclaw tier test private", MemoryCategory::Core, None)
-        .await
-        .unwrap();
-    mem.store("group:techteam:config", "Snowclaw tier test group", MemoryCategory::Core, None)
-        .await
-        .unwrap();
+    mem.store(
+        "core:fact",
+        "Snowclaw tier test public",
+        MemoryCategory::Core,
+        None,
+    )
+    .await
+    .unwrap();
+    mem.store(
+        "pref:lang",
+        "Snowclaw tier test private",
+        MemoryCategory::Core,
+        None,
+    )
+    .await
+    .unwrap();
+    mem.store(
+        "group:techteam:config",
+        "Snowclaw tier test group",
+        MemoryCategory::Core,
+        None,
+    )
+    .await
+    .unwrap();
 
     // No context → no filtering → all returned
     let results = mem.recall("Snowclaw tier test", 10, None).await.unwrap();
-    assert_eq!(results.len(), 3, "Without context, all tiers should be visible");
+    assert_eq!(
+        results.len(),
+        3,
+        "Without context, all tiers should be visible"
+    );
 }
 
 #[tokio::test]
@@ -101,15 +119,30 @@ async fn recall_main_session_sees_all_tiers() {
     let cfg = test_config();
     let mem = CollectiveMemory::new_in_memory(&cfg).unwrap();
 
-    mem.store("core:fact", "Snowclaw session test public", MemoryCategory::Core, None)
-        .await
-        .unwrap();
-    mem.store("pref:lang", "Snowclaw session test private", MemoryCategory::Core, None)
-        .await
-        .unwrap();
-    mem.store("group:techteam:config", "Snowclaw session test group", MemoryCategory::Core, None)
-        .await
-        .unwrap();
+    mem.store(
+        "core:fact",
+        "Snowclaw session test public",
+        MemoryCategory::Core,
+        None,
+    )
+    .await
+    .unwrap();
+    mem.store(
+        "pref:lang",
+        "Snowclaw session test private",
+        MemoryCategory::Core,
+        None,
+    )
+    .await
+    .unwrap();
+    mem.store(
+        "group:techteam:config",
+        "Snowclaw session test group",
+        MemoryCategory::Core,
+        None,
+    )
+    .await
+    .unwrap();
 
     let ctx = RecallContext {
         is_main_session: true,
@@ -117,7 +150,10 @@ async fn recall_main_session_sees_all_tiers() {
         group_id: None,
     };
 
-    let results = mem.recall_with_context("Snowclaw session test", 10, None, Some(&ctx)).await.unwrap();
+    let results = mem
+        .recall_with_context("Snowclaw session test", 10, None, Some(&ctx))
+        .await
+        .unwrap();
     assert_eq!(results.len(), 3, "Main session should see all tiers");
 }
 
@@ -126,18 +162,38 @@ async fn recall_group_sees_public_and_matching_group() {
     let cfg = test_config();
     let mem = CollectiveMemory::new_in_memory(&cfg).unwrap();
 
-    mem.store("core:fact", "Snowclaw grouptest public data", MemoryCategory::Core, None)
-        .await
-        .unwrap();
-    mem.store("pref:lang", "Snowclaw grouptest private data", MemoryCategory::Core, None)
-        .await
-        .unwrap();
-    mem.store("group:techteam:config", "Snowclaw grouptest techteam data", MemoryCategory::Core, None)
-        .await
-        .unwrap();
-    mem.store("group:other:secret", "Snowclaw grouptest other data", MemoryCategory::Core, None)
-        .await
-        .unwrap();
+    mem.store(
+        "core:fact",
+        "Snowclaw grouptest public data",
+        MemoryCategory::Core,
+        None,
+    )
+    .await
+    .unwrap();
+    mem.store(
+        "pref:lang",
+        "Snowclaw grouptest private data",
+        MemoryCategory::Core,
+        None,
+    )
+    .await
+    .unwrap();
+    mem.store(
+        "group:techteam:config",
+        "Snowclaw grouptest techteam data",
+        MemoryCategory::Core,
+        None,
+    )
+    .await
+    .unwrap();
+    mem.store(
+        "group:other:secret",
+        "Snowclaw grouptest other data",
+        MemoryCategory::Core,
+        None,
+    )
+    .await
+    .unwrap();
 
     let ctx = RecallContext {
         is_main_session: false,
@@ -172,15 +228,30 @@ async fn recall_other_channel_sees_public_only() {
     let cfg = test_config();
     let mem = CollectiveMemory::new_in_memory(&cfg).unwrap();
 
-    mem.store("core:fact", "Snowclaw chantest public info", MemoryCategory::Core, None)
-        .await
-        .unwrap();
-    mem.store("pref:lang", "Snowclaw chantest private info", MemoryCategory::Core, None)
-        .await
-        .unwrap();
-    mem.store("group:techteam:config", "Snowclaw chantest group info", MemoryCategory::Core, None)
-        .await
-        .unwrap();
+    mem.store(
+        "core:fact",
+        "Snowclaw chantest public info",
+        MemoryCategory::Core,
+        None,
+    )
+    .await
+    .unwrap();
+    mem.store(
+        "pref:lang",
+        "Snowclaw chantest private info",
+        MemoryCategory::Core,
+        None,
+    )
+    .await
+    .unwrap();
+    mem.store(
+        "group:techteam:config",
+        "Snowclaw chantest group info",
+        MemoryCategory::Core,
+        None,
+    )
+    .await
+    .unwrap();
 
     let ctx = RecallContext {
         is_main_session: false,
@@ -213,7 +284,10 @@ async fn recall_other_channel_sees_public_only() {
 async fn relay_store_sync_roundtrip() {
     let nsec = read_nsec_from_config();
     let relay_url = "wss://zooid.atlantislabs.space".to_string();
-    let test_prefix = format!("test:cmv2:{}", uuid::Uuid::new_v4().to_string()[..8].to_string());
+    let test_prefix = format!(
+        "test:cmv2:{}",
+        uuid::Uuid::new_v4().to_string()[..8].to_string()
+    );
 
     let mut cfg = test_config();
     cfg.relay_urls = vec![relay_url.clone()];
@@ -226,9 +300,14 @@ async fn relay_store_sync_roundtrip() {
 
     // Store with test-specific keys
     let key = format!("{test_prefix}:roundtrip");
-    mem.store(&key, "Relay roundtrip test content", MemoryCategory::Core, None)
-        .await
-        .unwrap();
+    mem.store(
+        &key,
+        "Relay roundtrip test content",
+        MemoryCategory::Core,
+        None,
+    )
+    .await
+    .unwrap();
 
     // Wait for relay publish (fire-and-forget, needs time)
     tokio::time::sleep(std::time::Duration::from_secs(3)).await;
@@ -239,7 +318,10 @@ async fn relay_store_sync_roundtrip() {
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
     let synced = mem2.sync_from_relay().await.unwrap();
-    assert!(synced > 0, "Should have synced at least one event from relay");
+    assert!(
+        synced > 0,
+        "Should have synced at least one event from relay"
+    );
 
     // Verify the synced memory is retrievable
     let entry = mem2.get(&key).await.unwrap();
@@ -256,7 +338,10 @@ async fn relay_store_sync_roundtrip() {
 async fn relay_tier_filtering_with_sync() {
     let nsec = read_nsec_from_config();
     let relay_url = "wss://zooid.atlantislabs.space".to_string();
-    let test_prefix = format!("test:cmv2:{}", uuid::Uuid::new_v4().to_string()[..8].to_string());
+    let test_prefix = format!(
+        "test:cmv2:{}",
+        uuid::Uuid::new_v4().to_string()[..8].to_string()
+    );
 
     let mut cfg = test_config();
     cfg.relay_urls = vec![relay_url.clone()];

@@ -529,6 +529,9 @@ fn is_allowed_cross_skill_target(skill_root: &Path, canonical_target: &Path) -> 
     let Some(collection_root) = skill_root.parent() else {
         return false;
     };
+    if !has_collection_depth(collection_root, canonical_target) {
+        return false;
+    }
 
     canonical_target.starts_with(collection_root)
         && canonical_target.is_file()
@@ -550,7 +553,9 @@ fn is_allowed_missing_cross_skill_target(skill_root: &Path, source: &Path, targe
         return false;
     };
 
-    lexical.starts_with(collection_root) && is_markdown_file(&lexical)
+    lexical.starts_with(collection_root)
+        && is_markdown_file(&lexical)
+        && has_collection_depth(collection_root, &lexical)
 }
 
 /// Normalizes `.` and `..` segments without requiring filesystem existence.
@@ -572,6 +577,16 @@ fn normalize_lexical_path(path: &Path) -> Option<PathBuf> {
     }
 
     Some(normalized)
+}
+
+fn has_collection_depth(collection_root: &Path, target: &Path) -> bool {
+    let Ok(rel) = target.strip_prefix(collection_root) else {
+        return false;
+    };
+    let mut components = rel
+        .components()
+        .filter(|component| matches!(component, Component::Normal(_)));
+    components.next().is_some() && components.next().is_some()
 }
 
 fn relative_display(root: &Path, path: &Path) -> String {
@@ -841,13 +856,16 @@ mod tests {
     fn audit_rejects_markdown_escape_links() {
         let dir = tempfile::tempdir().unwrap();
         let skill_dir = dir.path().join("escape");
+        let parent_dir = dir.path().parent().expect("tempdir should have parent");
+        let outside_name = format!("outside-{}.md", uuid::Uuid::new_v4());
+        let outside_path = parent_dir.join(&outside_name);
         std::fs::create_dir_all(&skill_dir).unwrap();
         std::fs::write(
             skill_dir.join("SKILL.md"),
-            "# Skill\nRead [hidden](../outside.md)\n",
+            format!("# Skill\nRead [hidden](../../{outside_name})\n"),
         )
         .unwrap();
-        std::fs::write(dir.path().join("outside.md"), "not allowed\n").unwrap();
+        std::fs::write(&outside_path, "not allowed\n").unwrap();
 
         let report = audit_skill_directory(&skill_dir).unwrap();
         assert!(
@@ -857,6 +875,8 @@ mod tests {
             "{:#?}",
             report.findings
         );
+
+        let _ = std::fs::remove_file(outside_path);
     }
 
     #[test]

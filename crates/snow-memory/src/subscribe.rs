@@ -29,7 +29,8 @@ impl EventDedup {
 
         // Evict oldest if at capacity (simple: just clear half)
         if self.seen.len() >= self.max_size {
-            let to_remove: Vec<String> = self.seen.iter().take(self.max_size / 2).cloned().collect();
+            let to_remove: Vec<String> =
+                self.seen.iter().take(self.max_size / 2).cloned().collect();
             for id in to_remove {
                 self.seen.remove(&id);
             }
@@ -98,17 +99,33 @@ pub fn parse_relay_message(msg: &str) -> RelayMessage {
             }
         }
         Some("EOSE") => {
-            let sub_id = arr.get(1).and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let sub_id = arr
+                .get(1)
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             RelayMessage::EndOfStoredEvents { sub_id }
         }
         Some("NOTICE") => {
-            let message = arr.get(1).and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let message = arr
+                .get(1)
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             RelayMessage::Notice { message }
         }
         Some("OK") => {
-            let event_id = arr.get(1).and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let event_id = arr
+                .get(1)
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             let accepted = arr.get(2).and_then(|v| v.as_bool()).unwrap_or(false);
-            let message = arr.get(3).and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let message = arr
+                .get(3)
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             RelayMessage::Ok {
                 event_id,
                 accepted,
@@ -123,28 +140,15 @@ pub fn parse_relay_message(msg: &str) -> RelayMessage {
 #[derive(Debug, Clone)]
 pub enum RelayMessage {
     /// A snow: memory event was received.
-    MemoryEvent {
-        sub_id: String,
-        memory: Memory,
-    },
+    MemoryEvent { sub_id: String, memory: Memory },
     /// A kind 0 profile event (may contain agent metadata).
-    ProfileEvent {
-        sub_id: String,
-        event_json: String,
-    },
+    ProfileEvent { sub_id: String, event_json: String },
     /// Non-memory event.
-    OtherEvent {
-        sub_id: String,
-        kind: u32,
-    },
+    OtherEvent { sub_id: String, kind: u32 },
     /// End of stored events — real-time events follow.
-    EndOfStoredEvents {
-        sub_id: String,
-    },
+    EndOfStoredEvents { sub_id: String },
     /// Relay notice.
-    Notice {
-        message: String,
-    },
+    Notice { message: String },
     /// Event acceptance confirmation.
     Ok {
         event_id: String,
@@ -190,7 +194,9 @@ mod tests {
     fn test_parse_ok() {
         let msg = r#"["OK","abc123",true,""]"#;
         match parse_relay_message(msg) {
-            RelayMessage::Ok { event_id, accepted, .. } => {
+            RelayMessage::Ok {
+                event_id, accepted, ..
+            } => {
                 assert_eq!(event_id, "abc123");
                 assert!(accepted);
             }
